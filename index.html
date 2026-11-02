@@ -31,9 +31,15 @@
               Hold <kbd id="hotkey-hint">Ctrl+Shift+Space</kbd> and speak, release to paste.
               Tap it once for hands-free; tap again to stop.
               <kbd id="summary-hint">Alt+Shift+Space</kbd> works the same but pastes a summary.
+              Changed your mind about a cleanup? <kbd id="undo-hint">Ctrl+Alt+Z</kbd> pastes what you actually said.
             </p>
           </header>
-          <h2>Recent</h2>
+          <div class="row history-bar">
+            <h2>Recent</h2>
+            <span id="history-stats" class="muted small"></span>
+            <input id="history-search" type="search" placeholder="Search…" />
+            <button id="history-clear" class="btn ghost">Clear</button>
+          </div>
           <ul id="history" class="history"></ul>
           <p id="history-empty" class="empty">Nothing yet. Put your cursor in any text field and try the hotkey.</p>
         </section>
@@ -161,10 +167,28 @@
           <label class="field">Push-to-talk hotkey <span class="muted small">click, then press the combination</span>
             <input id="hotkey" class="hotkey" readonly />
           </label>
+          <div class="grid2">
+            <label class="field">Undo cleanup <span class="muted small">pastes the last dictation as heard</span>
+              <input id="undo-hotkey" class="hotkey" readonly />
+            </label>
+            <label class="field">Paste again <span class="muted small">pastes the last dictation once more</span>
+              <input id="repaste-hotkey" class="hotkey" readonly />
+            </label>
+          </div>
+          <p class="muted small hint">Click a hotkey field and press Backspace to turn that hotkey off.</p>
           <label class="field">Microphone
             <select id="microphone"><option value="">System default</option></select>
           </label>
           <label class="check"><input id="restore-clipboard" type="checkbox" /> Restore my clipboard after pasting</label>
+
+          <div class="card">
+            <h2>History</h2>
+            <label class="check"><input id="keep-history" type="checkbox" /> Keep my dictations between restarts</label>
+            <label class="field">Forget dictations after <span class="muted small">days; 0 keeps them until you clear them</span>
+              <input id="history-days" type="number" min="0" max="3650" style="width: 120px" />
+            </label>
+            <p class="muted small">Text only, stored in <code>history.json</code> next to your settings. Audio is never kept.</p>
+          </div>
 
           <div class="card">
             <h2>Updates</h2>

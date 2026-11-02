@@ -14,6 +14,8 @@ interface Remote {
 interface Settings {
   hotkey: string;
   summary_hotkey: string;
+  undo_hotkey: string;
+  repaste_hotkey: string;
   polish: Polish;
   format_style: FormatStyle;
   text_model: { engine: Engine; local_model: string; remote: Remote };
@@ -25,7 +27,11 @@ interface Settings {
   dictionary: string[];
   microphone: string;
   restore_clipboard: boolean;
+  keep_history: boolean;
+  history_days: number;
 }
+
+type HotkeyField = "hotkey" | "summary_hotkey" | "undo_hotkey" | "repaste_hotkey";
 
 interface ModelInfo {
   name: string;
@@ -35,6 +41,8 @@ interface ModelInfo {
 
 interface HistoryEntry {
   text: string;
+  raw: string;
+  mode: string;
   app: string;
   engine: string;
   latency_ms: number;
@@ -91,7 +99,8 @@ function renderBadge() {
     settings.engine === "local" ? `On device · ${settings.local_model}` : `Server · ${settings.remote.model || "default"}`;
   $("engine-badge").textContent = label;
   $("hotkey-hint").textContent = settings.hotkey;
-  $("summary-hint").textContent = settings.summary_hotkey;
+  $("summary-hint").textContent = settings.summary_hotkey || "(off)";
+  $("undo-hint").textContent = settings.undo_hotkey || "(off)";
 }
 
 const POLISH_HINTS: Record<Polish, string> = {
@@ -197,29 +206,91 @@ async function download(name: string, text: boolean) {
   }
 }
 
+function when(at: number) {
+  const d = new Date(at * 1000);
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return d.toDateString() === new Date().toDateString()
+    ? time
+    : `${d.toLocaleDateString([], { day: "numeric", month: "short" })} ${time}`;
+}
+
+function copyButton(label: string, text: string) {
+  const btn = document.createElement("button");
+  btn.className = "btn ghost";
+  btn.textContent = label;
+  btn.onclick = async () => {
+    await navigator.clipboard.writeText(text);
+    toast("Copied");
+  };
+  return btn;
+}
+
 function historyItem(h: HistoryEntry) {
   const li = document.createElement("li");
   const text = document.createElement("p");
   text.textContent = h.text;
   const meta = document.createElement("div");
   meta.className = "meta";
-  const when = new Date(h.at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  meta.textContent = [when, h.app || "unknown app", h.engine, `${(h.latency_ms / 1000).toFixed(1)}s`].join(" · ");
-  const copy = document.createElement("button");
-  copy.className = "btn ghost";
-  copy.textContent = "Copy";
-  copy.onclick = async () => {
-    await navigator.clipboard.writeText(h.text);
-    toast("Copied");
-  };
-  meta.append(copy);
-  li.append(text, meta);
+  const info = document.createElement("span");
+  const mode = document.createElement("span");
+  mode.className = "mode";
+  mode.textContent = h.mode;
+  info.append(
+    [when(h.at), h.app || "unknown app", h.engine, `${(h.latency_ms / 1000).toFixed(1)}s`].join(" · ") + " · ",
+    mode,
+  );
+  const actions = document.createElement("span");
+  actions.className = "row";
+  actions.append(copyButton("Copy", h.text));
+  li.append(text);
+  const changed = h.raw && h.raw !== h.text;
+  if (changed) {
+    const original = document.createElement("p");
+    original.className = "original";
+    original.textContent = h.raw;
+    original.hidden = true;
+    const toggle = document.createElement("button");
+    toggle.className = "btn ghost";
+    toggle.textContent = "Original";
+    toggle.onclick = () => {
+      original.hidden = !original.hidden;
+      toggle.textContent = original.hidden ? "Original" : "Hide original";
+    };
+    actions.prepend(toggle, copyButton("Copy original", h.raw));
+    li.append(original);
+  }
+  meta.append(info, actions);
+  li.append(meta);
   return li;
 }
 
-function renderHistory(items: HistoryEntry[]) {
+let history: HistoryEntry[] = [];
+
+function renderHistory() {
+  const q = $<HTMLInputElement>("history-search").value.trim().toLowerCase();
+  const items = q
+    ? history.filter((h) => h.text.toLowerCase().includes(q) || h.raw.toLowerCase().includes(q) || h.app.toLowerCase().includes(q))
+    : history;
   $("history").replaceChildren(...items.map(historyItem));
   $("history-empty").hidden = items.length > 0;
+  $("history-empty").textContent = q
+    ? "No dictation matches that."
+    : "Nothing yet. Put your cursor in any text field and try the hotkey.";
+  renderStats();
+}
+
+// Today's words and the average time per dictation, so local and server can be compared.
+function renderStats() {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const today = history.filter((h) => h.at * 1000 >= start.getTime());
+  if (today.length === 0) {
+    $("history-stats").textContent = "";
+    return;
+  }
+  const words = today.reduce((n, h) => n + h.text.split(/\s+/).filter(Boolean).length, 0);
+  const avg = today.reduce((n, h) => n + h.latency_ms, 0) / today.length / 1000;
+  $("history-stats").textContent = `Today: ${today.length} dictation${today.length === 1 ? "" : "s"}, ${words} words, ${avg.toFixed(1)}s avg`;
 }
 
 // --- inputs ---
@@ -271,8 +342,30 @@ function bindInputs() {
   restore.checked = settings.restore_clipboard;
   restore.onchange = () => ((settings.restore_clipboard = restore.checked), save(true));
 
+  const keep = $<HTMLInputElement>("keep-history");
+  keep.checked = settings.keep_history;
+  keep.onchange = () => ((settings.keep_history = keep.checked), save(true));
+  const days = $<HTMLInputElement>("history-days");
+  days.value = String(settings.history_days);
+  days.oninput = () => {
+    const n = Math.max(0, Math.floor(Number(days.value) || 0));
+    settings.history_days = n;
+    save();
+  };
+  $("history-search").oninput = () => renderHistory();
+  $("history-clear").onclick = async () => {
+    if (history.length === 0) return;
+    if (!confirm(`Forget all ${history.length} dictations? This can't be undone.`)) return;
+    await invoke("clear_history");
+    history = [];
+    renderHistory();
+    toast("History cleared");
+  };
+
   bindHotkey("hotkey", "hotkey");
   bindHotkey("summary-hotkey", "summary_hotkey");
+  bindHotkey("undo-hotkey", "undo_hotkey");
+  bindHotkey("repaste-hotkey", "repaste_hotkey");
 
   document.querySelectorAll<HTMLInputElement>('input[name="polish"]').forEach((r) =>
     r.addEventListener("change", () => {
@@ -315,12 +408,26 @@ function bindInputs() {
   };
 }
 
-function bindHotkey(id: string, key: "hotkey" | "summary_hotkey") {
+function bindHotkey(id: string, key: HotkeyField) {
   const hotkey = $<HTMLInputElement>(id);
-  hotkey.value = settings[key];
+  const show = () => (hotkey.value = settings[key] || "(off)");
+  show();
   hotkey.addEventListener("keydown", (e) => {
     e.preventDefault();
     if (["Control", "Shift", "Alt", "Meta"].includes(e.key)) return;
+    if ((e.key === "Backspace" || e.key === "Delete") && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
+      if (key === "hotkey") {
+        toast("The dictation hotkey can't be turned off", true);
+        return;
+      }
+      const previous = settings[key];
+      settings[key] = "";
+      show();
+      invoke("save_settings", { settings })
+        .then(() => (toast("Hotkey turned off"), renderBadge()))
+        .catch((err) => ((settings[key] = previous), show(), toast(String(err), true)));
+      return;
+    }
     const parts = [];
     if (e.ctrlKey) parts.push("Ctrl");
     if (e.altKey) parts.push("Alt");
@@ -334,12 +441,12 @@ function bindHotkey(id: string, key: "hotkey" | "summary_hotkey") {
     const combo = parts.join("+");
     const previous = settings[key];
     settings[key] = combo;
-    hotkey.value = combo;
+    show();
     invoke("save_settings", { settings })
       .then(() => (toast(`Hotkey set to ${combo}`), renderBadge()))
       .catch((err) => {
         settings[key] = previous;
-        hotkey.value = previous;
+        show();
         toast(String(err), true);
       });
   });
@@ -410,11 +517,11 @@ async function init() {
   bindInputs();
   await Promise.all([renderModels(), loadMicrophones(), initUpdates()]);
 
-  const history = await invoke<HistoryEntry[]>("get_history");
-  renderHistory(history);
+  history = await invoke<HistoryEntry[]>("get_history");
+  renderHistory();
   await listen<HistoryEntry>("history-added", (e) => {
     history.unshift(e.payload);
-    renderHistory(history);
+    renderHistory();
   });
   await listen<{ name: string; downloaded: number; total: number }>("model-progress", (e) => {
     const { name, downloaded, total } = e.payload;

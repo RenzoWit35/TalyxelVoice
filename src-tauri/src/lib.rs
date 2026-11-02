@@ -1,4 +1,5 @@
 mod audio;
+mod history;
 mod pipeline;
 mod platform;
 mod polish;
@@ -6,7 +7,7 @@ mod settings;
 mod stt;
 mod updates;
 
-use std::collections::VecDeque;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -17,7 +18,8 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, State, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
-use pipeline::{Dictation, HistoryEntry};
+use history::{History, HistoryEntry};
+use pipeline::{Dictation, Kind};
 use settings::{RemoteSettings, Settings};
 
 pub struct AppState {
@@ -27,7 +29,18 @@ pub struct AppState {
     local: Arc<stt::LocalWhisper>,
     text_model: Arc<polish::LocalTextModel>,
     dictation: Mutex<Dictation>,
-    history: Mutex<VecDeque<HistoryEntry>>,
+    history: Mutex<History>,
+    /// Registered shortcut id → what it does.
+    hotkeys: Mutex<HashMap<u32, Action>>,
+}
+
+/// What a global hotkey does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Action {
+    Dictate,
+    Summary,
+    Undo,
+    Repaste,
 }
 
 /// (name, approximate size in MB) from ggerganov/whisper.cpp on Hugging Face.
@@ -69,11 +82,15 @@ fn get_settings(state: State<AppState>) -> Settings {
 
 #[tauri::command]
 fn save_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> CmdResult<()> {
-    register_hotkeys(&app, &settings)?;
+    let hotkeys = register_hotkeys(&app, &settings)?;
+    *state.hotkeys.lock().unwrap() = hotkeys;
     settings.save(&state.settings_path).map_err(err)?;
     let previous = std::mem::replace(&mut *state.settings.lock().unwrap(), settings.clone());
     if previous.engine != settings.engine || previous.local_model != settings.local_model {
         warm_up(&app);
+    }
+    if previous.keep_history && !settings.keep_history {
+        state.history.lock().unwrap().forget_file();
     }
     Ok(())
 }
@@ -177,32 +194,60 @@ async fn test_text_remote(remote: RemoteSettings) -> CmdResult<String> {
 
 #[tauri::command]
 fn get_history(state: State<AppState>) -> Vec<HistoryEntry> {
-    state.history.lock().unwrap().iter().cloned().collect()
+    state.history.lock().unwrap().entries()
+}
+
+#[tauri::command]
+fn clear_history(state: State<AppState>) {
+    state.history.lock().unwrap().clear();
 }
 
 fn parse_hotkey(hotkey: &str) -> CmdResult<Shortcut> {
     hotkey.parse().map_err(|e| format!("invalid hotkey {hotkey:?}: {e}"))
 }
 
-fn register_hotkeys(app: &AppHandle, settings: &Settings) -> CmdResult<()> {
-    let dictate = parse_hotkey(&settings.hotkey)?;
-    let summary = parse_hotkey(&settings.summary_hotkey)?;
-    if dictate.id() == summary.id() {
-        return Err("the dictation and summary hotkeys must differ".into());
+/// Registers every configured hotkey (an empty one is off) and returns the
+/// shortcut id → action map the handler looks up.
+fn register_hotkeys(app: &AppHandle, settings: &Settings) -> CmdResult<HashMap<u32, Action>> {
+    let wanted = [
+        (Action::Dictate, settings.hotkey.as_str()),
+        (Action::Summary, settings.summary_hotkey.as_str()),
+        (Action::Undo, settings.undo_hotkey.as_str()),
+        (Action::Repaste, settings.repaste_hotkey.as_str()),
+    ];
+    let mut map = HashMap::new();
+    let mut shortcuts = Vec::new();
+    for (action, hotkey) in wanted {
+        if hotkey.trim().is_empty() {
+            if action == Action::Dictate {
+                return Err("the dictation hotkey can't be empty".into());
+            }
+            continue;
+        }
+        let shortcut = parse_hotkey(hotkey)?;
+        if map.insert(shortcut.id(), action).is_some() {
+            return Err(format!("{hotkey} is used for two things; pick a different key"));
+        }
+        shortcuts.push((shortcut, hotkey));
     }
     let gs = app.global_shortcut();
     gs.unregister_all().map_err(err)?;
-    for (shortcut, name) in [(dictate, &settings.hotkey), (summary, &settings.summary_hotkey)] {
+    for (shortcut, name) in shortcuts {
         gs.register(shortcut).map_err(|e| format!("couldn't register {name}: {e}"))?;
     }
-    Ok(())
+    Ok(map)
 }
 
-/// Whether `shortcut` is the summary hotkey rather than the dictation one.
-fn is_summary_hotkey(app: &AppHandle, shortcut: &Shortcut) -> bool {
-    let Some(state) = app.try_state::<AppState>() else { return false };
-    let hotkey = state.settings.lock().unwrap().summary_hotkey.clone();
-    parse_hotkey(&hotkey).is_ok_and(|s| s.id() == shortcut.id())
+fn on_shortcut(app: &AppHandle, shortcut: &Shortcut, pressed: bool) {
+    let Some(state) = app.try_state::<AppState>() else { return };
+    let action = state.hotkeys.lock().unwrap().get(&shortcut.id()).copied();
+    match action {
+        Some(Action::Dictate) => pipeline::on_hotkey(app, pressed, Kind::Dictate),
+        Some(Action::Summary) => pipeline::on_hotkey(app, pressed, Kind::Summary),
+        Some(Action::Undo) if pressed => pipeline::paste_last(app, true),
+        Some(Action::Repaste) if pressed => pipeline::paste_last(app, false),
+        _ => {}
+    }
 }
 
 fn show_main(app: &AppHandle) {
@@ -275,8 +320,7 @@ pub fn run() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
-                    let summary = is_summary_hotkey(app, shortcut);
-                    pipeline::on_hotkey(app, event.state() == ShortcutState::Pressed, summary);
+                    on_shortcut(app, shortcut, event.state() == ShortcutState::Pressed);
                 })
                 .build(),
         )
@@ -286,8 +330,14 @@ pub fn run() {
             let settings_path = config_dir.join("settings.json");
             let settings = Settings::load(&settings_path);
 
-            if let Err(e) = register_hotkeys(app.handle(), &settings) {
+            let hotkeys = register_hotkeys(app.handle(), &settings).unwrap_or_else(|e| {
                 log::error!("{e}");
+                HashMap::new()
+            });
+            let history_days = if settings.keep_history { settings.history_days } else { 0 };
+            let history = History::load(config_dir.join("history.json"), history_days);
+            if !settings.keep_history {
+                history.forget_file();
             }
             let llama_server = app.path().resource_dir()?.join("llama").join("llama-server.exe");
             app.manage(AppState {
@@ -297,7 +347,8 @@ pub fn run() {
                 local: Arc::new(stt::LocalWhisper::default()),
                 text_model: polish::LocalTextModel::new(llama_server),
                 dictation: Mutex::new(Dictation::Idle),
-                history: Mutex::new(VecDeque::new()),
+                history: Mutex::new(history),
+                hotkeys: Mutex::new(hotkeys),
             });
             // Created here rather than from the config, so its first invoke
             // can't run before AppState is managed (the bundled page loads fast).
@@ -357,6 +408,7 @@ pub fn run() {
             test_text_remote,
             test_remote,
             get_history,
+            clear_history,
             app_version,
             get_update_status,
             check_for_updates,

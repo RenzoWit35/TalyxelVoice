@@ -88,6 +88,10 @@ pub struct Settings {
     pub hotkey: String,
     /// Same as `hotkey`, but pastes a summary of what you said.
     pub summary_hotkey: String,
+    /// Pastes the last dictation as whisper heard it, before any cleanup.
+    pub undo_hotkey: String,
+    /// Pastes the last dictation again.
+    pub repaste_hotkey: String,
     pub polish: Polish,
     pub format_style: FormatStyle,
     pub text_model: TextModelSettings,
@@ -104,6 +108,10 @@ pub struct Settings {
     /// Input device name; empty means the system default.
     pub microphone: String,
     pub restore_clipboard: bool,
+    /// Keep dictations in `history.json` across restarts (text only, never audio).
+    pub keep_history: bool,
+    /// Drop saved dictations older than this at startup; 0 keeps them forever.
+    pub history_days: u32,
 }
 
 impl Default for Settings {
@@ -111,6 +119,8 @@ impl Default for Settings {
         Self {
             hotkey: "Ctrl+Shift+Space".into(),
             summary_hotkey: "Alt+Shift+Space".into(),
+            undo_hotkey: "Ctrl+Alt+Z".into(),
+            repaste_hotkey: "Ctrl+Alt+V".into(),
             polish: Polish::Clean,
             format_style: FormatStyle::Text,
             text_model: TextModelSettings::default(),
@@ -122,6 +132,8 @@ impl Default for Settings {
             dictionary: Vec::new(),
             microphone: String::new(),
             restore_clipboard: true,
+            keep_history: true,
+            history_days: 14,
         }
     }
 }

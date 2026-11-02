@@ -16,6 +16,7 @@ body { display: flex; align-items: center; justify-content: center; font: 600 13
 .pill[data-state="transcribing"] .bars i:nth-child(2n) { animation-delay: 0.15s; }
 .pill[data-state="transcribing"] .bars i:nth-child(3n) { animation-delay: 0.3s; }
 .pill[data-state="error"] { background: rgb(150 32 26 / 0.95); }
-.pill[data-state="error"] .bars { display: none; }
+.pill[data-state="error"] .bars, .pill[data-state="info"] .bars { display: none; }
+.pill[data-state="info"] { background: rgb(10 100 110 / 0.95); }
 
 @keyframes pulse { 50% { height: 14px; opacity: 0.6; } }

@@ -5,6 +5,7 @@ type PillEvent =
   | { state: "level"; level: number }
   | { state: "transcribing" }
   | { state: "polishing"; summary: boolean }
+  | { state: "info"; message: string }
   | { state: "error"; message: string };
 
 const BAR_COUNT = 9;
@@ -42,6 +43,11 @@ listen<PillEvent>("pill", ({ payload }) => {
     case "polishing":
       pill.dataset.state = "transcribing";
       label.textContent = payload.summary ? "Summarizing" : "Formatting";
+      break;
+    case "info":
+      pill.dataset.state = "info";
+      label.textContent = payload.message;
+      pill.title = payload.message;
       break;
     case "error":
       pill.dataset.state = "error";

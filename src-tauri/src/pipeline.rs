@@ -1,14 +1,15 @@
 //! Hotkey → record → transcribe → paste.
 
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::audio::{self, Recording, WHISPER_RATE};
+use crate::history::{self, HistoryEntry};
 use crate::platform::{self, FocusedApp};
 use crate::polish::{self, Task};
-use crate::settings::{Engine, Polish};
+use crate::settings::{Engine, Polish, Settings};
 use crate::stt;
 use crate::AppState;
 
@@ -18,7 +19,15 @@ const TAP: Duration = Duration::from_millis(350);
 const MIN_SPEECH_SECS: f32 = 0.3;
 /// Peak amplitude below which a recording is treated as silence (about -40 dBFS).
 const SILENCE_PEAK: f32 = 0.01;
-const HISTORY_LEN: usize = 50;
+
+/// Which hotkey started a recording, which decides what the words become.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// Pasted as text, after the configured cleanup.
+    Dictate,
+    /// Pasted as a few summary bullets.
+    Summary,
+}
 
 pub enum Dictation {
     Idle,
@@ -26,20 +35,10 @@ pub enum Dictation {
         rec: Recording,
         started: Instant,
         hands_free: bool,
-        /// Started with the summary hotkey.
-        summary: bool,
+        kind: Kind,
         app: FocusedApp,
     },
     Busy,
-}
-
-#[derive(Clone, Serialize)]
-pub struct HistoryEntry {
-    pub text: String,
-    pub app: String,
-    pub engine: String,
-    pub latency_ms: u128,
-    pub at: u64,
 }
 
 #[derive(Clone, Serialize)]
@@ -49,6 +48,7 @@ enum Pill {
     Level { level: f32 },
     Transcribing,
     Polishing { summary: bool },
+    Info { message: String },
     Error { message: String },
 }
 
@@ -72,16 +72,16 @@ fn hide_pill(app: &AppHandle) {
     }
 }
 
-/// `summary` says which hotkey fired. While recording, only the hotkey that
-/// started it can stop it.
-pub fn on_hotkey(app: &AppHandle, pressed: bool, summary: bool) {
+/// While recording, only the hotkey that started it can stop it.
+pub fn on_hotkey(app: &AppHandle, pressed: bool, kind: Kind) {
     let state = app.state::<AppState>();
     let mut dictation = state.dictation.lock().unwrap();
-    if let Dictation::Recording { summary: started_with, .. } = &*dictation {
-        if *started_with != summary {
+    if let Dictation::Recording { kind: started_with, .. } = &*dictation {
+        if *started_with != kind {
             return;
         }
     }
+    let summary = kind == Kind::Summary;
     match (&mut *dictation, pressed) {
         (Dictation::Idle, true) => {
             let focused = platform::focused_app();
@@ -92,7 +92,7 @@ pub fn on_hotkey(app: &AppHandle, pressed: bool, summary: bool) {
                         rec,
                         started: Instant::now(),
                         hands_free: false,
-                        summary,
+                        kind,
                         app: focused,
                     };
                     // Load the text model while the user talks.
@@ -149,10 +149,10 @@ fn spawn_level_meter(app: AppHandle) {
 
 fn finish(app: AppHandle) {
     let state = app.state::<AppState>();
-    let (rec, focused, summary) = {
+    let (rec, focused, kind) = {
         let mut dictation = state.dictation.lock().unwrap();
         match std::mem::replace(&mut *dictation, Dictation::Busy) {
-            Dictation::Recording { rec, app, summary, .. } => (rec, app, summary),
+            Dictation::Recording { rec, app, kind, .. } => (rec, app, kind),
             other => {
                 *dictation = other;
                 return;
@@ -162,7 +162,7 @@ fn finish(app: AppHandle) {
     pill(&app, Pill::Transcribing);
 
     tauri::async_runtime::spawn(async move {
-        let result = run(&app, rec, &focused, summary).await;
+        let result = run(&app, rec, &focused, kind).await;
         let state = app.state::<AppState>();
         *state.dictation.lock().unwrap() = Dictation::Idle;
         match result {
@@ -178,7 +178,7 @@ async fn run(
     app: &AppHandle,
     rec: Recording,
     focused: &FocusedApp,
-    summary: bool,
+    kind: Kind,
 ) -> anyhow::Result<Option<anyhow::Error>> {
     let samples = tauri::async_runtime::spawn_blocking(move || rec.stop()).await?;
     let secs = samples.len() as f32 / WHISPER_RATE as f32;
@@ -207,10 +207,12 @@ async fn run(
         return Ok(None);
     }
     let language = transcript.language.as_deref();
+    let raw = transcript.text;
 
+    let summary = kind == Kind::Summary;
     let mut text = match settings.polish {
-        Polish::Off if !summary => transcript.text.clone(),
-        _ => polish::strip_fillers(&transcript.text, language),
+        Polish::Off if !summary => raw.clone(),
+        _ => polish::strip_fillers(&raw, language),
     };
     let task = if summary {
         Some(Task::Summarize)
@@ -218,6 +220,12 @@ async fn run(
         Some(Task::Format(settings.format_style))
     } else {
         None
+    };
+    let mut mode = match (task, settings.polish) {
+        (Some(Task::Summarize), _) => "summary".to_owned(),
+        (Some(Task::Format(style)), _) => format!("format · {}", format!("{style:?}").to_lowercase()),
+        (None, Polish::Off) => "as spoken".to_owned(),
+        (None, _) => "clean".to_owned(),
     };
     let mut warning = None;
     if let Some(task) = task {
@@ -229,50 +237,91 @@ async fn run(
                 log::warn!("{task:?} failed: {e:#}");
                 let what = if task == Task::Summarize { "summarize" } else { "format" };
                 warning = Some(anyhow::anyhow!("Couldn't {what} ({e}); pasted the plain text"));
+                mode = "clean (model failed)".to_owned();
             }
         }
     }
-    let latency_ms = started.elapsed().as_millis();
+    let latency_ms = started.elapsed().as_millis() as u64;
 
-    let restore = settings.restore_clipboard;
-    let paste_text = text.clone();
-    tauri::async_runtime::spawn_blocking(move || platform::insert_text(&paste_text, restore))
-        .await??;
+    paste(&settings, text.clone()).await?;
 
-    let entry = HistoryEntry {
-        text,
-        app: focused.exe.clone(),
-        engine: {
-            let engine = match settings.engine {
-                Engine::Local => format!("local · {}", settings.local_model),
-                Engine::Remote => format!("server · {}", settings.remote.model),
-            };
-            match task {
-                Some(Task::Summarize) if warning.is_none() => format!("{engine} · summary"),
-                Some(Task::Format(style)) if warning.is_none() => {
-                    format!("{engine} · {}", format!("{style:?}").to_lowercase())
-                }
-                _ => engine,
-            }
+    record(
+        app,
+        &settings,
+        HistoryEntry {
+            text,
+            raw,
+            mode,
+            app: focused.exe.clone(),
+            engine: engine_label(&settings),
+            latency_ms,
+            at: history::now(),
         },
-        latency_ms,
-        at: SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()),
-    };
-    {
-        let mut history = state.history.lock().unwrap();
-        history.push_front(entry.clone());
-        history.truncate(HISTORY_LEN);
-    }
-    let _ = app.emit("history-added", entry);
+    );
     Ok(warning)
+}
+
+fn engine_label(settings: &Settings) -> String {
+    match settings.engine {
+        Engine::Local => format!("local · {}", settings.local_model),
+        Engine::Remote => format!("server · {}", settings.remote.model),
+    }
+}
+
+async fn paste(settings: &Settings, text: String) -> anyhow::Result<()> {
+    let restore = settings.restore_clipboard;
+    tauri::async_runtime::spawn_blocking(move || platform::insert_text(&text, restore)).await?
+}
+
+fn record(app: &AppHandle, settings: &Settings, entry: HistoryEntry) {
+    let state = app.state::<AppState>();
+    state.history.lock().unwrap().push(entry.clone(), settings.keep_history);
+    let _ = app.emit("history-added", entry);
+}
+
+/// The undo and re-paste hotkeys: pastes the last dictation again, as heard
+/// (`original`) or as it went in.
+pub fn paste_last(app: &AppHandle, original: bool) {
+    let state = app.state::<AppState>();
+    if !matches!(*state.dictation.lock().unwrap(), Dictation::Idle) {
+        return;
+    }
+    let last = state.history.lock().unwrap().last().cloned();
+    let Some(entry) = last else {
+        report_error(app.clone(), "Nothing dictated yet".into());
+        return;
+    };
+    if original && entry.raw == entry.text {
+        report_error(app.clone(), "Nothing to undo: it was pasted as heard".into());
+        return;
+    }
+    let settings = state.settings.lock().unwrap().clone();
+    let text = if original { entry.raw } else { entry.text };
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        match paste(&settings, text).await {
+            Ok(()) => notice(app, if original { "Pasted the original" } else { "Pasted again" }),
+            Err(e) => report_error(app, e.to_string()),
+        }
+    });
+}
+
+fn notice(app: AppHandle, message: &str) {
+    pill(&app, Pill::Info { message: message.to_owned() });
+    show_pill(&app);
+    hide_later(app, 1200);
 }
 
 fn report_error(app: AppHandle, message: String) {
     log::error!("{message}");
     pill(&app, Pill::Error { message });
     show_pill(&app);
+    hide_later(app, 3000);
+}
+
+fn hide_later(app: AppHandle, ms: u64) {
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(3000)).await;
+        tokio::time::sleep(Duration::from_millis(ms)).await;
         if matches!(*app.state::<AppState>().dictation.lock().unwrap(), Dictation::Idle) {
             hide_pill(&app);
         }
