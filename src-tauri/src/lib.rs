@@ -8,7 +8,7 @@ mod settings;
 mod stt;
 mod updates;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -35,6 +35,8 @@ pub struct AppState {
     history: Mutex<History>,
     /// Registered shortcut id → what it does.
     hotkeys: Mutex<HashMap<u32, Action>>,
+    /// Configured hotkeys another app already holds.
+    taken_hotkeys: Mutex<Vec<String>>,
     notes: Mutex<Notes>,
     /// While set, dictations are added to this note instead of pasted.
     capture: Mutex<Option<u64>>,
@@ -106,11 +108,20 @@ fn get_settings(state: State<AppState>) -> Settings {
 }
 
 #[tauri::command]
-fn save_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> CmdResult<()> {
-    let hotkeys = register_hotkeys(&app, &settings)?;
+fn save_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> CmdResult<Vec<String>> {
+    let previous = state.settings.lock().unwrap().clone();
+    let (hotkeys, taken) = register_hotkeys(&app, &settings)?;
+    let was_set = |hotkey: &str| configured_hotkeys(&previous).iter().any(|(_, h)| *h == hotkey);
+    if let Some(hotkey) = taken.iter().find(|h| !was_set(h.as_str())) {
+        // A newly picked hotkey is taken: keep the old ones and don't save.
+        let (hotkeys, _) = register_hotkeys(&app, &previous)?;
+        *state.hotkeys.lock().unwrap() = hotkeys;
+        return Err(format!("{hotkey} is already used by another app; pick a different key"));
+    }
     *state.hotkeys.lock().unwrap() = hotkeys;
+    *state.taken_hotkeys.lock().unwrap() = taken.clone();
     settings.save(&state.settings_path).map_err(err)?;
-    let previous = std::mem::replace(&mut *state.settings.lock().unwrap(), settings.clone());
+    *state.settings.lock().unwrap() = settings.clone();
     if previous.engine != settings.engine || previous.local_model != settings.local_model {
         warm_up(&app);
     }
@@ -120,7 +131,7 @@ fn save_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> 
     if previous.autostart != settings.autostart {
         apply_autostart(&app, settings.autostart)?;
     }
-    Ok(())
+    Ok(taken)
 }
 
 fn apply_autostart(app: &AppHandle, on: bool) -> CmdResult<()> {
@@ -242,20 +253,24 @@ fn parse_hotkey(hotkey: &str) -> CmdResult<Shortcut> {
     hotkey.parse().map_err(|e| format!("invalid hotkey {hotkey:?}: {e}"))
 }
 
-/// Registers every configured hotkey (an empty one is off) and returns the
-/// shortcut id → action map the handler looks up.
-fn register_hotkeys(app: &AppHandle, settings: &Settings) -> CmdResult<HashMap<u32, Action>> {
-    let wanted = [
+fn configured_hotkeys(settings: &Settings) -> [(Action, &str); 6] {
+    [
         (Action::Dictate, settings.hotkey.as_str()),
         (Action::Summary, settings.summary_hotkey.as_str()),
         (Action::Command, settings.command_hotkey.as_str()),
         (Action::Transform, settings.transform_hotkey.as_str()),
         (Action::Undo, settings.undo_hotkey.as_str()),
         (Action::Repaste, settings.repaste_hotkey.as_str()),
-    ];
-    let mut map = HashMap::new();
+    ]
+}
+
+/// Registers every configured hotkey (an empty one is off) and returns the
+/// shortcut id → action map the handler looks up, plus the hotkeys another app
+/// already holds. Those stay off; they don't take the other hotkeys down.
+fn register_hotkeys(app: &AppHandle, settings: &Settings) -> CmdResult<(HashMap<u32, Action>, Vec<String>)> {
+    let mut ids = HashSet::new();
     let mut shortcuts = Vec::new();
-    for (action, hotkey) in wanted {
+    for (action, hotkey) in configured_hotkeys(settings) {
         if hotkey.trim().is_empty() {
             if action == Action::Dictate {
                 return Err("the dictation hotkey can't be empty".into());
@@ -263,17 +278,34 @@ fn register_hotkeys(app: &AppHandle, settings: &Settings) -> CmdResult<HashMap<u
             continue;
         }
         let shortcut = parse_hotkey(hotkey)?;
-        if map.insert(shortcut.id(), action).is_some() {
+        if !ids.insert(shortcut.id()) {
             return Err(format!("{hotkey} is used for two things; pick a different key"));
         }
-        shortcuts.push((shortcut, hotkey));
+        shortcuts.push((shortcut, action, hotkey));
     }
     let gs = app.global_shortcut();
     gs.unregister_all().map_err(err)?;
-    for (shortcut, name) in shortcuts {
-        gs.register(shortcut).map_err(|e| format!("couldn't register {name}: {e}"))?;
+    let mut map = HashMap::new();
+    let mut taken = Vec::new();
+    for (shortcut, action, hotkey) in shortcuts {
+        let id = shortcut.id();
+        match gs.register(shortcut) {
+            Ok(()) => {
+                map.insert(id, action);
+            }
+            Err(e) => {
+                log::warn!("couldn't register {hotkey}: {e}");
+                taken.push(hotkey.to_owned());
+            }
+        }
     }
-    Ok(map)
+    Ok((map, taken))
+}
+
+/// Configured hotkeys that another app holds, so they're off.
+#[tauri::command]
+fn taken_hotkeys(state: State<AppState>) -> Vec<String> {
+    state.taken_hotkeys.lock().unwrap().clone()
 }
 
 fn on_shortcut(app: &AppHandle, shortcut: &Shortcut, pressed: bool) {
@@ -444,9 +476,9 @@ pub fn run() {
             let settings_path = config_dir.join("settings.json");
             let settings = Settings::load(&settings_path);
 
-            let hotkeys = register_hotkeys(app.handle(), &settings).unwrap_or_else(|e| {
+            let (hotkeys, taken) = register_hotkeys(app.handle(), &settings).unwrap_or_else(|e| {
                 log::error!("{e}");
-                HashMap::new()
+                Default::default()
             });
             let history_days = if settings.keep_history { settings.history_days } else { 0 };
             let history = History::load(config_dir.join("history.json"), history_days);
@@ -463,6 +495,7 @@ pub fn run() {
                 dictation: Mutex::new(Dictation::Idle),
                 history: Mutex::new(history),
                 hotkeys: Mutex::new(hotkeys),
+                taken_hotkeys: Mutex::new(taken),
                 notes: Mutex::new(Notes::load(config_dir.join("notes.json"))),
                 capture: Mutex::new(None),
             });
@@ -549,6 +582,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_settings,
             save_settings,
+            taken_hotkeys,
             list_microphones,
             list_models,
             list_text_models,

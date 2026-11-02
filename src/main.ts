@@ -81,6 +81,8 @@ interface HistoryEntry {
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 let settings: Settings;
+// Configured hotkeys another app already holds, so they're off.
+let taken: string[] = [];
 const downloading = new Map<string, number>();
 
 function toast(message: string, error = false) {
@@ -97,7 +99,7 @@ function save(immediate = false) {
   clearTimeout(saveTimer);
   const run = async () => {
     try {
-      await invoke("save_settings", { settings });
+      taken = await invoke<string[]>("save_settings", { settings });
       toast("Saved");
       renderBadge();
     } catch (e) {
@@ -617,7 +619,12 @@ function bindInputs() {
 
 function bindHotkey(id: string, key: HotkeyField) {
   const hotkey = $<HTMLInputElement>(id);
-  const show = () => (hotkey.value = settings[key] || "(off)");
+  const show = () =>
+    (hotkey.value = !settings[key]
+      ? "(off)"
+      : taken.includes(settings[key])
+        ? `${settings[key]} (used by another app, so off)`
+        : settings[key]);
   show();
   hotkey.addEventListener("keydown", (e) => {
     e.preventDefault();
@@ -630,8 +637,8 @@ function bindHotkey(id: string, key: HotkeyField) {
       const previous = settings[key];
       settings[key] = "";
       show();
-      invoke("save_settings", { settings })
-        .then(() => (toast("Hotkey turned off"), renderBadge()))
+      invoke<string[]>("save_settings", { settings })
+        .then((t) => ((taken = t), toast("Hotkey turned off"), renderBadge()))
         .catch((err) => ((settings[key] = previous), show(), toast(String(err), true)));
       return;
     }
@@ -649,8 +656,8 @@ function bindHotkey(id: string, key: HotkeyField) {
     const previous = settings[key];
     settings[key] = combo;
     show();
-    invoke("save_settings", { settings })
-      .then(() => (toast(`Hotkey set to ${combo}`), renderBadge()))
+    invoke<string[]>("save_settings", { settings })
+      .then((t) => ((taken = t), show(), toast(`Hotkey set to ${combo}`), renderBadge()))
       .catch((err) => {
         settings[key] = previous;
         show();
@@ -909,6 +916,10 @@ async function initNotes() {
 
 async function init() {
   settings = await invoke<Settings>("get_settings");
+  taken = await invoke<string[]>("taken_hotkeys");
+  if (taken.length) {
+    toast(`Another app already uses ${taken.join(" and ")}, so that hotkey is off. Pick a different key.`, true);
+  }
   renderBadge();
   renderEngine();
   renderPolish();
