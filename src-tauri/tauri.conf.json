@@ -55,7 +55,8 @@
     ],
     "createUpdaterArtifacts": true,
     "resources": {
-      "llama/*": "llama/"
+      "llama/*": "llama/",
+      "vulkan/*": "vulkan/"
     }
   },
   "plugins": {

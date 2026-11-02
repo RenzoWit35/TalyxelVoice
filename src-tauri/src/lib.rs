@@ -1,4 +1,5 @@
 mod audio;
+mod gpu;
 mod history;
 mod notes;
 mod pipeline;
@@ -122,7 +123,9 @@ fn save_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> 
     *state.taken_hotkeys.lock().unwrap() = taken.clone();
     settings.save(&state.settings_path).map_err(err)?;
     *state.settings.lock().unwrap() = settings.clone();
-    if previous.engine != settings.engine || previous.local_model != settings.local_model {
+    state.local.set_gpu(settings.gpu);
+    state.text_model.set_gpu(settings.gpu);
+    if previous.engine != settings.engine || previous.local_model != settings.local_model || previous.gpu != settings.gpu {
         warm_up(&app);
     }
     if previous.keep_history && !settings.keep_history {
@@ -403,6 +406,15 @@ fn show_main(app: &AppHandle) {
     }
 }
 
+/// The graphics card the models run on when `gpu` is on; `None` means the CPU.
+#[tauri::command]
+async fn gpu_name() -> Option<String> {
+    tauri::async_runtime::spawn_blocking(|| gpu::pick().map(|gpu| gpu.description.clone()))
+        .await
+        .ok()
+        .flatten()
+}
+
 #[tauri::command]
 fn app_version(app: AppHandle) -> String {
     app.package_info().version.to_string()
@@ -471,6 +483,8 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            // Before anything touches whisper (ggml starts Vulkan on first use).
+            gpu::load_vulkan(&app.path().resource_dir()?);
             let config_dir = app.path().app_config_dir()?;
             let data_dir = app.path().app_data_dir()?;
             let settings_path = config_dir.join("settings.json");
@@ -486,12 +500,16 @@ pub fn run() {
                 history.forget_file();
             }
             let llama_server = app.path().resource_dir()?.join("llama").join("llama-server.exe");
+            let local = Arc::new(stt::LocalWhisper::default());
+            local.set_gpu(settings.gpu);
+            let text_model = polish::LocalTextModel::new(llama_server);
+            text_model.set_gpu(settings.gpu);
             app.manage(AppState {
                 settings: Mutex::new(settings),
                 settings_path,
                 models_dir: data_dir.join("models"),
-                local: Arc::new(stt::LocalWhisper::default()),
-                text_model: polish::LocalTextModel::new(llama_server),
+                local,
+                text_model,
                 dictation: Mutex::new(Dictation::Idle),
                 history: Mutex::new(history),
                 hotkeys: Mutex::new(hotkeys),
@@ -583,6 +601,7 @@ pub fn run() {
             get_settings,
             save_settings,
             taken_hotkeys,
+            gpu_name,
             list_microphones,
             list_models,
             list_text_models,

@@ -25,6 +25,7 @@ interface Settings {
   text_model: { engine: Engine; local_model: string; remote: Remote };
   engine: Engine;
   local_model: string;
+  gpu: boolean;
   remote: Remote;
   language: string;
   spoken_languages: string[];
@@ -541,6 +542,13 @@ function bindInputs() {
   const restore = $<HTMLInputElement>("restore-clipboard");
   restore.checked = settings.restore_clipboard;
   restore.onchange = () => ((settings.restore_clipboard = restore.checked), save(true));
+
+  const gpu = $<HTMLInputElement>("gpu");
+  gpu.checked = settings.gpu;
+  gpu.onchange = () => ((settings.gpu = gpu.checked), save(true));
+  invoke<string | null>("gpu_name").then(
+    (name) => ($("gpu-name").textContent = name ? `· ${name}` : "· none found, so the CPU runs it"),
+  );
 
   const autostart = $<HTMLInputElement>("autostart");
   autostart.checked = settings.autostart;

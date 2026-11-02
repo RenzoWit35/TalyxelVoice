@@ -4,6 +4,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -294,6 +295,8 @@ pub struct LocalTextModel {
     exe: PathBuf,
     server: tokio::sync::Mutex<Option<Server>>,
     last_used: Mutex<Instant>,
+    /// Settings' `gpu`; a change restarts the server on its next use.
+    use_gpu: AtomicBool,
 }
 
 const IDLE: Duration = Duration::from_secs(5 * 60);
@@ -302,6 +305,7 @@ struct Server {
     child: Child,
     port: u16,
     model: PathBuf,
+    gpu: bool,
 }
 
 impl Drop for Server {
@@ -323,6 +327,7 @@ impl LocalTextModel {
             exe,
             server: tokio::sync::Mutex::new(None),
             last_used: Mutex::new(Instant::now()),
+            use_gpu: AtomicBool::new(false),
         });
         let reaper = model.clone();
         tauri::async_runtime::spawn(async move {
@@ -342,6 +347,10 @@ impl LocalTextModel {
         model
     }
 
+    pub fn set_gpu(&self, on: bool) {
+        self.use_gpu.store(on, Ordering::Relaxed);
+    }
+
     fn touch(&self) {
         *self.last_used.lock().unwrap() = Instant::now();
     }
@@ -349,9 +358,10 @@ impl LocalTextModel {
     /// Base URL of a llama-server running `model`, starting one if needed.
     async fn endpoint(&self, model: &Path) -> anyhow::Result<String> {
         self.touch();
+        let gpu = self.use_gpu.load(Ordering::Relaxed);
         let mut guard = self.server.lock().await;
         if let Some(server) = guard.as_mut() {
-            if server.model == model && server.child.try_wait()?.is_none() {
+            if server.model == model && server.gpu == gpu && server.child.try_wait()?.is_none() {
                 return Ok(format!("http://127.0.0.1:{}", server.port));
             }
         }
@@ -368,8 +378,19 @@ impl LocalTextModel {
         cmd.arg("-m")
             .arg(model)
             .args(["--host", "127.0.0.1", "--port", &port.to_string()])
-            .args(["-c", "4096", "-t", &threads().to_string(), "--no-webui"])
-            .stdin(Stdio::null())
+            .args(["-c", "4096", "-t", &threads().to_string(), "--no-webui"]);
+        // Left to itself it splits the model across every GPU, the CPU's own
+        // slow one included; layers that don't fit in VRAM stay on the CPU.
+        let device = if gpu {
+            let exe = self.exe.clone();
+            tokio::task::spawn_blocking(move || crate::gpu::llama_device(&exe)).await?
+        } else {
+            Some("none")
+        };
+        if let Some(device) = device {
+            cmd.args(["--device", device]);
+        }
+        cmd.stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         #[cfg(windows)]
@@ -382,7 +403,7 @@ impl LocalTextModel {
         if let Err(e) = crate::platform::kill_with_parent(&child) {
             log::warn!("llama-server won't be stopped if the app crashes: {e}");
         }
-        let mut server = Server { child, port, model: model.to_owned() };
+        let mut server = Server { child, port, model: model.to_owned(), gpu };
 
         let started = Instant::now();
         let health = format!("http://127.0.0.1:{port}/health");
@@ -969,6 +990,7 @@ mod tests {
                 exe,
                 server: tokio::sync::Mutex::new(None),
                 last_used: Mutex::new(Instant::now()),
+                use_gpu: AtomicBool::new(true),
             };
             let meeting = "Eh ja, dus de meeting van morgen is verplaatst naar donderdag, want Pieter kan niet. \
                  We moeten nog de slides afmaken, de budget numbers checken en de klant mailen over de planning.";

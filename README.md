@@ -33,7 +33,8 @@ Settings: `%APPDATA%\com.talyxel.voice\settings.json` · Models: `%APPDATA%\com.
 ## Run it
 
 Prerequisites on Windows: Rust, Node 22+, **VS Build Tools** (C++), **LLVM** (`winget install LLVM.LLVM`,
-for whisper's bindgen), and `ninja.exe` on PATH (VS Build Tools ships one under
+for whisper's bindgen), the **Vulkan SDK** (`winget install KhronosGroup.VulkanSDK`, for whisper's GPU
+backend; it sets `VULKAN_SDK`), and `ninja.exe` on PATH (VS Build Tools ships one under
 `Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja`). `src-tauri/.cargo/config.toml` explains the
 build settings; the short version is that without Ninja the `cmake` crate builds whisper.cpp
 **unoptimized** under MSVC, which makes it ~50x slower.
@@ -45,9 +46,18 @@ npm run tauri dev
 
 Then open the Engine tab and download a model (`small-q5_1` is a good default on CPU).
 
-`npm run tauri dev`/`build` first runs `npm run fetch-llama`, which downloads a pinned llama.cpp CPU
-build (checksum-verified) into `src-tauri/llama/`. It is bundled as a resource; plain `cargo` commands
-need it to exist too, so run `npm run fetch-llama` once after cloning.
+`npm run tauri dev`/`build` first runs `npm run fetch-llama`, which downloads a pinned llama.cpp Vulkan
+build into `src-tauri/llama/` and the Vulkan loader into `src-tauri/vulkan/` (both checksum-verified).
+They are bundled as resources; plain `cargo` commands need them to exist too, so run
+`npm run fetch-llama` once after cloning.
+
+### GPU
+
+Whisper and the text model run on the graphics card through Vulkan, so NVIDIA, AMD and Intel all
+work, with the CPU as the fallback (Engine → "Run on the graphics card"). With several GPUs,
+`src-tauri/src/gpu.rs` picks the dedicated one with the most memory over the CPU's own; text-model
+layers that don't fit in its memory stay on the CPU. Only GPU drivers install `vulkan-1.dll`, so the
+app delay-loads it and falls back to the bundled loader, which finds no devices, on a PC without one.
 
 ## Cleanup, formatting and summaries
 
@@ -204,12 +214,13 @@ http feed).
 
 See [ROADMAP.md](ROADMAP.md). Shipped so far: core dictation, cleanup levels and summaries, undo
 and history, snippets and spoken punctuation, per-app modes, transforms and commands on selected
-text. Still open: a modifier-only hotkey (hold Right-Ctrl) via a low-level keyboard hook, a Vulkan
-GPU build for Intel Arc / AMD iGPUs, streaming partial results, macOS.
+text, Vulkan GPU acceleration. Still open: a modifier-only hotkey (hold Right-Ctrl) via a low-level
+keyboard hook, streaming partial results, macOS.
 
 ## Third-party
 
 `llama-server` and its DLLs come unmodified from [llama.cpp](https://github.com/ggml-org/llama.cpp)
-(MIT), build pinned in `scripts/fetch-llama.mjs`. The default text model is
+(MIT), build pinned in `scripts/fetch-llama.mjs`. `vulkan/vulkan-1.dll` is the unmodified
+[Vulkan loader](https://github.com/KhronosGroup/Vulkan-Loader) (Apache-2.0) from LunarG's runtime. The default text model is
 [Qwen2.5-1.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF) (Apache-2.0),
 downloaded on request.
