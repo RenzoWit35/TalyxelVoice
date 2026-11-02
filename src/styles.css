@@ -192,3 +192,30 @@ textarea { resize: vertical; font-family: "Cascadia Code", Consolas, monospace; 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition-duration: 1ms !important; }
 }
+
+/* Notes */
+.tab.wide { max-width: 960px; }
+.notes { display: grid; grid-template-columns: 210px 1fr; gap: 20px; align-items: start; }
+.notes-list .row { gap: 8px; flex-wrap: nowrap; }
+.notes-list input { flex: 1; min-width: 0; padding: 6px 10px; }
+.notes-list ul { list-style: none; padding: 0; margin: 12px 0 0; display: flex; flex-direction: column; gap: 4px; }
+.notes-list li { padding: 8px 10px; border-radius: 8px; cursor: pointer; display: flex; flex-direction: column; gap: 2px;
+  transition: background var(--dur-fast) var(--ease), transform var(--dur) var(--ease); animation: rise var(--dur) var(--ease) both; }
+.notes-list li:hover { background: color-mix(in srgb, var(--panel) 60%, transparent); transform: translateX(2px); }
+.notes-list li.active { background: var(--panel); box-shadow: 0 1px 2px rgb(0 0 0 / 0.06); transform: none; }
+.notes-list li b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notes-list li b.pinned::before { content: "★ "; color: var(--gold-line); }
+.notes-list li span { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notes-list .empty { padding: 12px 10px; }
+.note-editor { display: flex; flex-direction: column; gap: 10px; animation: rise var(--dur) var(--ease) both; }
+.note-editor[hidden] { display: none; }
+.note-editor #note-title { font-weight: 600; font-size: 15px; }
+.note-editor textarea { min-height: 320px; font-family: inherit; font-size: 14px; line-height: 1.55; padding: 12px 14px; }
+.note-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.note-tools select { padding: 6px 10px; }
+.note-tools-right { margin-left: auto; }
+#note-capture.on { background: var(--accent-fill); border-color: var(--accent-fill); color: var(--accent-ink); }
+#note-capture.on::before { content: "● "; animation: blink 1.4s var(--ease) infinite; }
+@keyframes blink { 50% { opacity: 0.35; } }
+#note-none[hidden] { display: none; }
+@media (max-width: 700px) { .notes { grid-template-columns: 1fr; } }

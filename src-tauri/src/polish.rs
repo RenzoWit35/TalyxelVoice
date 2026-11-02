@@ -616,6 +616,55 @@ fn examples(task: &Task) -> &'static [(&'static str, &'static str)] {
                 "Server migration\n- Copied the shares to the new server.\n- Updated the login scripts.\n- To do: test the backups.",
             ),
         ],
+        Task::Format(FormatStyle::Prompt) | Task::Transform(Transform::Prompt) => &[
+            (
+                "ik wil een website waar je meerdere projecten hebt en ze in mappen kunt zetten met een donkere interface en animaties maar het moet ook goed werken op een ultrawide monitor",
+                "Doel: ontwerp een responsief projectdashboard.
+
+Functionele eisen:
+- Meerdere projecten aanmaken.
+- Projecten in mappen organiseren.
+- Goed bruikbaar op brede en ultrawide schermen.
+
+Ontwerp:
+- Donker thema.
+- Subtiele animaties.",
+            ),
+            (
+                "so I need a script that goes through our mailboxes and finds everything older than two years and archives it but it should ask before deleting anything and log what it did",
+                "Goal: write a script that archives old mailbox items.
+
+Requirements:
+- Go through all mailboxes.
+- Find items older than two years and archive them.
+- Log every action.
+
+Constraints:
+- Ask for confirmation before deleting anything.",
+            ),
+        ],
+        Task::Transform(Transform::Friendlier) => &[
+            (
+                "De factuur is nog niet betaald. Graag deze week overmaken.",
+                "Ik zag dat de factuur nog openstaat. Zou je deze week kunnen overmaken? Alvast bedankt!",
+            ),
+            (
+                "Your ticket is closed. Reopen it if the problem comes back.",
+                "Good news: your ticket is resolved, so I've closed it. If the problem comes back, just reply and I'll reopen it right away.",
+            ),
+        ],
+        Task::Transform(Transform::Formal) => &[
+            (
+                "hey, die server doet het weer niet, kun je er ff naar kijken?",
+                "Beste collega,
+
+De server is opnieuw niet bereikbaar. Zou u ernaar kunnen kijken?",
+            ),
+            (
+                "thanks for the quick fix, works great now!",
+                "Thank you for the prompt resolution; the system is functioning correctly again.",
+            ),
+        ],
         Task::Summarize => &[
             (
                 "ja dus het gesprek met de leverancier ging goed ze kunnen de levering naar maandag halen maar de prijs gaat wel vijf procent omhoog en ze willen een contract voor twee jaar",
@@ -645,6 +694,15 @@ fn system_prompt(task: &Task, language: Option<&str>) -> String {
         Task::Transform(Transform::Shorter) => {
             "Shorten the text to about half its length. Keep every fact, name, number and \
              agreement, the same tone, and the same language."
+        }
+        Task::Transform(Transform::Friendlier) => {
+            "Rewrite the text to sound warmer and more considerate: a friendly opening, softened              requests, a thank-you where it fits. Keep every fact and the same language; don't              make it much longer."
+        }
+        Task::Transform(Transform::Formal) => {
+            "Rewrite the text in a businesslike, polite register, as in professional email: no slang              or abbreviations, complete sentences, a formal form of address. Keep every fact and              the same language."
+        }
+        Task::Transform(Transform::Prompt) | Task::Format(FormatStyle::Prompt) => {
+            "Turn rough thoughts into a clear, structured prompt for an AI assistant: a one-line              'Goal:' first, then 'Requirements:' as '- ' bullets, then 'Constraints:' bullets if              any were mentioned. Keep every requirement the speaker named, add none, and keep              the speaker's language (translate the headings too, e.g. 'Doel:', 'Eisen:',              'Randvoorwaarden:' in Dutch)."
         }
         Task::Command(_) => {
             "You edit text on request. Apply the instruction to the text and output only the \
@@ -728,6 +786,8 @@ fn plausible(task: &Task, input: &str, output: &str) -> bool {
         // Self-corrections make it shorter, never much longer, and never a
         // fraction of the input (that's a model answering, not cleaning).
         Task::Cleanup => out > 0 && out <= inp + 60 && out * 3 >= inp,
+        // Headings and bullets make a prompt longer than the rambling that fed it.
+        Task::Transform(Transform::Prompt) | Task::Format(FormatStyle::Prompt) => out > 0 && out <= inp * 3 + 200,
         Task::Format(_) => out > 0 && out <= inp * 2 + 100,
         Task::Summarize => out > 0 && out <= inp + 60,
         Task::Transform(Transform::Shorter) => out > 0 && out <= inp + 50,

@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 
 type Engine = "local" | "remote";
 type Polish = "off" | "clean" | "medium" | "format";
-type FormatStyle = "text" | "note" | "list" | "timelog";
+type FormatStyle = "text" | "note" | "list" | "timelog" | "prompt";
 
 interface Remote {
   url: string;
@@ -38,7 +38,16 @@ interface Settings {
   history_days: number;
 }
 
-type Transform = "polish" | "list" | "translate" | "shorter";
+type Transform = "polish" | "list" | "translate" | "shorter" | "friendlier" | "formal" | "prompt";
+
+interface Note {
+  id: number;
+  title: string;
+  body: string;
+  pinned: boolean;
+  created: number;
+  updated: number;
+}
 type HotkeyField = "hotkey" | "summary_hotkey" | "undo_hotkey" | "repaste_hotkey" | "transform_hotkey" | "command_hotkey";
 
 interface Snippet {
@@ -185,7 +194,7 @@ const POLISH_HINTS: Record<Polish, string> = {
 };
 
 const POLISH_LABELS: Record<Polish, string> = { off: "As spoken", clean: "Clean up", medium: "Medium", format: "Format" };
-const FORMAT_LABELS: Record<FormatStyle, string> = { text: "Text", note: "Note", list: "List", timelog: "Time log" };
+const FORMAT_LABELS: Record<FormatStyle, string> = { text: "Text", note: "Note", list: "List", timelog: "Time log", prompt: "Prompt" };
 
 function select<T extends string>(labels: Record<T, string>, value: T, onchange: (v: T) => void) {
   const el = document.createElement("select");
@@ -233,6 +242,7 @@ const FORMAT_STYLE_HINTS: Record<FormatStyle, string> = {
   note: "A short, businesslike note: names, numbers and agreements, without the chatter.",
   list: "Everything as bullets, with a heading if you say what the list is for.",
   timelog: "Time spent and subject first (only if you say the time), then what you did, in the past tense. For hour logs and tickets.",
+  prompt: "Rough thoughts become a structured prompt for an AI assistant: goal, requirements, constraints. For ChatGPT, Claude, Cursor.",
 };
 
 function renderPolish() {
@@ -368,6 +378,17 @@ function historyItem(h: HistoryEntry) {
   const actions = document.createElement("span");
   actions.className = "row";
   actions.append(copyButton("Copy", h.text));
+  if (currentNote) {
+    const toNote = document.createElement("button");
+    toNote.className = "btn ghost";
+    toNote.textContent = "To note";
+    toNote.onclick = async () => {
+      const note = await invoke<Note>("append_to_note", { id: currentNote!.id, text: h.text });
+      noteUpdated(note);
+      toast("Added to the note");
+    };
+    actions.append(toNote);
+  }
   li.append(text);
   const changed = h.raw && h.raw !== h.text;
   if (changed) {
@@ -695,6 +716,197 @@ async function loadMicrophones() {
   select.onchange = () => ((settings.microphone = select.value), save(true));
 }
 
+// --- notes ---
+let notes: Note[] = [];
+let currentNote: Note | null = null;
+let captureId: number | null = null;
+let noteUndo: string | null = null;
+let noteSaveTimer: number | undefined;
+
+function noteTitle(n: Note) {
+  if (n.title.trim()) return n.title.trim();
+  const line = n.body.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
+  const words = line.split(/\s+/).filter(Boolean);
+  return words.length ? words.slice(0, 8).join(" ") + (words.length > 8 ? "…" : "") : "Untitled";
+}
+
+function sortedNotes() {
+  const q = $<HTMLInputElement>("notes-search").value.trim().toLowerCase();
+  return notes
+    .filter((n) => !q || n.title.toLowerCase().includes(q) || n.body.toLowerCase().includes(q))
+    .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updated - a.updated);
+}
+
+function renderNotesList() {
+  const items = sortedNotes();
+  $("notes").replaceChildren(
+    ...items.map((n) => {
+      const li = document.createElement("li");
+      li.className = currentNote?.id === n.id ? "active" : "";
+      const title = document.createElement("b");
+      title.textContent = noteTitle(n);
+      if (n.pinned) title.classList.add("pinned");
+      const sub = document.createElement("span");
+      const preview = n.body.replace(/\s+/g, " ").trim();
+      sub.textContent = [when(n.updated), preview.slice(0, 60)].filter(Boolean).join(" · ");
+      li.append(title, sub);
+      li.onclick = () => openNote(n);
+      return li;
+    }),
+  );
+  $("notes-empty").hidden = items.length > 0;
+}
+
+function renderNoteEditor() {
+  const editor = $("note-editor");
+  $("note-none").hidden = currentNote !== null;
+  editor.hidden = currentNote === null;
+  if (!currentNote) return;
+  const title = $<HTMLInputElement>("note-title");
+  const body = $<HTMLTextAreaElement>("note-body");
+  if (title.value !== currentNote.title) title.value = currentNote.title;
+  if (body.value !== currentNote.body) body.value = currentNote.body;
+  $("note-pin").textContent = currentNote.pinned ? "Unpin" : "Pin";
+  const capture = $("note-capture");
+  const on = captureId === currentNote.id;
+  capture.classList.toggle("on", on);
+  capture.textContent = on ? "Dictating here" : "Dictate here";
+  $("note-undo").hidden = noteUndo === null;
+  const words = currentNote.body.split(/\s+/).filter(Boolean).length;
+  $("note-meta").textContent = `${words} word${words === 1 ? "" : "s"} · edited ${when(currentNote.updated)}`;
+}
+
+function openNote(n: Note) {
+  if (currentNote?.id !== n.id) noteUndo = null;
+  currentNote = n;
+  renderNotesList();
+  renderNoteEditor();
+  renderHistory();
+}
+
+function noteUpdated(note: Note) {
+  const i = notes.findIndex((n) => n.id === note.id);
+  if (i >= 0) notes[i] = note;
+  else notes.push(note);
+  if (currentNote?.id === note.id) {
+    currentNote = note;
+    const body = $<HTMLTextAreaElement>("note-body");
+    const atEnd = body.selectionStart === body.value.length;
+    renderNoteEditor();
+    if (atEnd) body.scrollTop = body.scrollHeight;
+  }
+  renderNotesList();
+}
+
+function saveCurrentNote(immediate = false) {
+  const note = currentNote;
+  if (!note) return;
+  clearTimeout(noteSaveTimer);
+  const run = async () => {
+    try {
+      const saved = await invoke<Note>("save_note", { note });
+      // Keep what the user typed meanwhile; only the server-side fields change.
+      note.id = saved.id;
+      note.created = saved.created;
+      note.updated = saved.updated;
+      if (!notes.includes(note)) notes.push(note);
+      renderNotesList();
+      renderNoteEditor();
+    } catch (e) {
+      toast(String(e), true);
+    }
+  };
+  if (immediate) run();
+  else noteSaveTimer = window.setTimeout(run, 400);
+}
+
+async function initNotes() {
+  notes = await invoke<Note[]>("list_notes");
+  captureId = await invoke<number | null>("get_capture");
+  renderNotesList();
+  renderNoteEditor();
+
+  $("notes-search").oninput = () => renderNotesList();
+  $("note-new").onclick = () => {
+    const now = Math.floor(Date.now() / 1000);
+    const note: Note = { id: 0, title: "", body: "", pinned: false, created: now, updated: now };
+    notes.push(note);
+    openNote(note);
+    saveCurrentNote(true);
+    $("note-body").focus();
+  };
+  const title = $<HTMLInputElement>("note-title");
+  const body = $<HTMLTextAreaElement>("note-body");
+  title.oninput = () => {
+    if (!currentNote) return;
+    currentNote.title = title.value;
+    saveCurrentNote();
+  };
+  body.oninput = () => {
+    if (!currentNote) return;
+    currentNote.body = body.value;
+    noteUndo = null;
+    $("note-undo").hidden = true;
+    saveCurrentNote();
+  };
+  $("note-pin").onclick = () => {
+    if (!currentNote) return;
+    currentNote.pinned = !currentNote.pinned;
+    saveCurrentNote(true);
+  };
+  $("note-copy").onclick = async () => {
+    if (!currentNote) return;
+    await navigator.clipboard.writeText(currentNote.body);
+    toast("Copied");
+  };
+  $("note-delete").onclick = async () => {
+    if (!currentNote) return;
+    if (currentNote.body.trim() && !confirm("Delete this note?")) return;
+    await invoke("delete_note", { id: currentNote.id });
+    notes = notes.filter((n) => n.id !== currentNote!.id);
+    if (captureId === currentNote.id) captureId = null;
+    currentNote = null;
+    renderNotesList();
+    renderNoteEditor();
+    renderHistory();
+  };
+  $("note-capture").onclick = async () => {
+    if (!currentNote) return;
+    captureId = captureId === currentNote.id ? null : currentNote.id;
+    await invoke("set_capture", { id: captureId });
+    renderNoteEditor();
+    toast(captureId ? "Dictations now go into this note" : "Dictations paste where your cursor is again");
+  };
+  const transform = $<HTMLSelectElement>("note-transform");
+  const apply = $<HTMLButtonElement>("note-apply");
+  apply.onclick = async () => {
+    if (!currentNote || !currentNote.body.trim()) return;
+    apply.disabled = true;
+    apply.textContent = "Working…";
+    try {
+      const before = currentNote.body;
+      const after = await invoke<string>("rewrite", { text: before, transform: transform.value });
+      noteUndo = before;
+      currentNote.body = after;
+      renderNoteEditor();
+      saveCurrentNote(true);
+    } catch (e) {
+      toast(String(e), true);
+    } finally {
+      apply.disabled = false;
+      apply.textContent = "Apply";
+    }
+  };
+  $("note-undo").onclick = () => {
+    if (!currentNote || noteUndo === null) return;
+    currentNote.body = noteUndo;
+    noteUndo = null;
+    renderNoteEditor();
+    saveCurrentNote(true);
+  };
+  await listen<Note>("note-updated", (e) => noteUpdated(e.payload));
+}
+
 async function init() {
   settings = await invoke<Settings>("get_settings");
   renderBadge();
@@ -710,6 +922,12 @@ async function init() {
     history.unshift(e.payload);
     renderHistory();
     renderAppModes();
+  });
+  await initNotes();
+  await listen<Settings>("settings-changed", (e) => {
+    settings = e.payload;
+    $<HTMLSelectElement>("language").value = settings.language;
+    renderBadge();
   });
   await listen<{ name: string; downloaded: number; total: number }>("model-progress", (e) => {
     const { name, downloaded, total } = e.payload;

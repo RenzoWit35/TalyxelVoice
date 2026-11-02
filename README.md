@@ -78,7 +78,7 @@ something that isn't a rewrite, the plain text is pasted and the pill says so.
 |---|---|
 | `Ctrl+Shift+Space` | Hold to dictate, tap for hands-free. Pastes where the cursor is. |
 | `Alt+Shift+Space` | Same, but pastes a few summary bullets. |
-| `Ctrl+Alt+P` | Rewrites the **selected** text with the chosen transform: polish, list, translate to English, shorter. |
+| `Ctrl+Alt+P` | Rewrites the **selected** text with the chosen transform: polish, list, translate to English, shorter, friendlier, formal, or prompt engineer (rough thoughts into a structured AI prompt). |
 | `Ctrl+Alt+Space` | Hold, say what to do with the selected text ("make this more formal"), release. |
 | `Ctrl+Alt+Z` | Undo the cleanup: pastes the last dictation (or the text a transform replaced) as it was. |
 | `Ctrl+Alt+V` | Pastes the last dictation again. |
@@ -96,7 +96,7 @@ model or your own server.
 | As spoken | Pasted as heard. | none |
 | Clean up (default) | Fillers (uh, um, eh) and stutters ("we should, we should") removed by rules. | none |
 | Medium | Clean up, then punctuation fixed and self-corrections resolved ("Thursday, no wait, Friday" keeps Friday). Words stay yours. | text model |
-| Format | Clean up, then reshaped as text, note, list or time log. | text model |
+| Format | Clean up, then reshaped as text, note, list, time log, or a structured AI prompt. | text model |
 
 **Per application**: a table under Cleanup & summary maps a program's file name (`OUTLOOK.EXE`,
 `Code.exe`, as shown in the history) to its own level, so mail gets Format and a terminal gets As
@@ -114,11 +114,24 @@ never what's in it.
   ("thanks for the update, my signature") and its text goes in instead, skipping cleanup and
   formatting.
 
+## Notes
+
+The Notes tab is a place to dictate into that isn't someone else's text field. **Dictate here** on a
+note routes every dictation (and summary) into that note instead of pasting it, until you turn it
+off; **To note** on a history entry adds that dictation afterwards. Notes can be pinned, searched,
+copied, and rewritten in place with any transform (polish, list, shorter, friendlier, formal,
+translate, prompt engineer) with one-step undo. They live in `notes.json` next to the settings.
+
 ## History
 
 The Dictation tab lists what you said and what went in, with a word diff behind **Changes**. It is
 kept in `history.json` next to the settings (text only, never audio), pruned after 14 days by
 default; both are under General, next to a Clear button and **Start with Windows**.
+
+## Tray
+
+The tray icon's menu opens the settings, checks for updates, and has a **Language** submenu to
+switch whisper's language for the next dictation without opening the window.
 
 ## Using your own server
 

@@ -1,5 +1,6 @@
 mod audio;
 mod history;
+mod notes;
 mod pipeline;
 mod platform;
 mod polish;
@@ -13,15 +14,16 @@ use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt;
 use serde::Serialize;
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, State, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 use history::{History, HistoryEntry};
+use notes::{Note, Notes};
 use pipeline::{Dictation, Kind};
-use settings::{RemoteSettings, Settings};
+use settings::{RemoteSettings, Settings, Transform};
 
 pub struct AppState {
     settings: Mutex<Settings>,
@@ -33,6 +35,9 @@ pub struct AppState {
     history: Mutex<History>,
     /// Registered shortcut id → what it does.
     hotkeys: Mutex<HashMap<u32, Action>>,
+    notes: Mutex<Notes>,
+    /// While set, dictations are added to this note instead of pasted.
+    capture: Mutex<Option<u64>>,
 }
 
 /// What a global hotkey does.
@@ -285,6 +290,79 @@ fn on_shortcut(app: &AppHandle, shortcut: &Shortcut, pressed: bool) {
     }
 }
 
+#[tauri::command]
+fn list_notes(state: State<AppState>) -> Vec<Note> {
+    state.notes.lock().unwrap().all()
+}
+
+#[tauri::command]
+fn save_note(state: State<AppState>, note: Note) -> Note {
+    state.notes.lock().unwrap().save(note)
+}
+
+#[tauri::command]
+fn delete_note(state: State<AppState>, id: u64) {
+    state.notes.lock().unwrap().delete(id);
+    let mut capture = state.capture.lock().unwrap();
+    if *capture == Some(id) {
+        *capture = None;
+    }
+}
+
+#[tauri::command]
+fn append_to_note(state: State<AppState>, id: u64, text: String) -> Note {
+    state.notes.lock().unwrap().append(id, &text)
+}
+
+/// Routes dictations into `id` instead of the focused app; `None` stops that.
+#[tauri::command]
+fn set_capture(state: State<AppState>, id: Option<u64>) {
+    *state.capture.lock().unwrap() = id;
+}
+
+#[tauri::command]
+fn get_capture(state: State<AppState>) -> Option<u64> {
+    *state.capture.lock().unwrap()
+}
+
+/// Runs a transform on text from the UI (a note), with the configured model.
+#[tauri::command]
+async fn rewrite(app: AppHandle, text: String, transform: Transform) -> CmdResult<String> {
+    let state = app.state::<AppState>();
+    let settings = state.settings.lock().unwrap().clone();
+    let task = polish::Task::Transform(transform);
+    polish::apply(&settings.text_model, &state.text_model, &state.models_dir, &task, &text, None)
+        .await
+        .map_err(|e| format!("{e:#}"))
+}
+
+/// (whisper code, menu label) in the tray's Language submenu.
+const TRAY_LANGUAGES: &[(&str, &str)] = &[
+    ("auto", "Detect automatically"),
+    ("nl", "Dutch"),
+    ("en", "English"),
+    ("de", "German"),
+    ("fr", "French"),
+];
+
+struct TrayLanguages(Mutex<Vec<CheckMenuItem<tauri::Wry>>>);
+
+fn set_language_from_tray(app: &AppHandle, code: &str) {
+    let state = app.state::<AppState>();
+    let settings = {
+        let mut settings = state.settings.lock().unwrap();
+        settings.language = code.to_owned();
+        settings.clone()
+    };
+    if let Err(e) = settings.save(&state.settings_path) {
+        log::warn!("couldn't save language: {e}");
+    }
+    for item in app.state::<TrayLanguages>().0.lock().unwrap().iter() {
+        let _ = item.set_checked(item.id().as_ref() == format!("lang:{code}"));
+    }
+    let _ = app.emit("settings-changed", settings);
+}
+
 fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
@@ -385,6 +463,8 @@ pub fn run() {
                 dictation: Mutex::new(Dictation::Idle),
                 history: Mutex::new(history),
                 hotkeys: Mutex::new(hotkeys),
+                notes: Mutex::new(Notes::load(config_dir.join("notes.json"))),
+                capture: Mutex::new(None),
             });
             // Created here rather than from the config, so its first invoke
             // can't run before AppState is managed (the bundled page loads fast).
@@ -408,7 +488,25 @@ pub fn run() {
             let open = MenuItem::with_id(app, "open", "Open TalyxelVoice", true, None::<&str>)?;
             let update = MenuItem::with_id(app, "update", "Check for updates", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open, &update, &quit])?;
+            // Quick language switch, like Wispr's Flow Bar: handy when the
+            // next dictation is in another language than usual.
+            let current = app.state::<AppState>().settings.lock().unwrap().language.clone();
+            let mut language_items = Vec::new();
+            for (code, name) in TRAY_LANGUAGES {
+                language_items.push(CheckMenuItem::with_id(
+                    app,
+                    format!("lang:{code}"),
+                    *name,
+                    true,
+                    *code == current,
+                    None::<&str>,
+                )?);
+            }
+            let language_refs: Vec<&dyn tauri::menu::IsMenuItem<_>> =
+                language_items.iter().map(|i| i as &dyn tauri::menu::IsMenuItem<_>).collect();
+            let language = Submenu::with_items(app, "Language", true, &language_refs)?;
+            app.manage(TrayLanguages(Mutex::new(language_items)));
+            let menu = Menu::with_items(app, &[&open, &language, &update, &quit])?;
             *app.state::<updates::Updates>().tray_item.lock().unwrap() = Some(update);
             updates::start(app.handle().clone());
             TrayIconBuilder::new()
@@ -420,7 +518,11 @@ pub fn run() {
                     "open" => show_main(app),
                     "update" => on_update_menu(app),
                     "quit" => app.exit(0),
-                    _ => {}
+                    id => {
+                        if let Some(code) = id.strip_prefix("lang:") {
+                            set_language_from_tray(app, code);
+                        }
+                    }
                 })
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click {
@@ -455,6 +557,13 @@ pub fn run() {
             test_remote,
             get_history,
             clear_history,
+            list_notes,
+            save_note,
+            delete_note,
+            append_to_note,
+            set_capture,
+            get_capture,
+            rewrite,
             app_version,
             get_update_status,
             check_for_updates,

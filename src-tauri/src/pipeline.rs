@@ -177,20 +177,27 @@ fn finish(app: AppHandle) {
         let state = app.state::<AppState>();
         *state.dictation.lock().unwrap() = Dictation::Idle;
         match result {
-            Ok(None) => hide_pill(&app),
-            Ok(Some(warning)) | Err(warning) => report_error(app.clone(), warning.to_string()),
+            Ok(Outcome::Done) => hide_pill(&app),
+            Ok(Outcome::Notice(message)) => notice(app.clone(), &message),
+            Ok(Outcome::Warning(warning)) | Err(warning) => report_error(app.clone(), warning.to_string()),
         }
     });
 }
 
-/// Returns a warning to show when the text went in but not as asked (the text
-/// model failed and the plain transcript was pasted instead).
+enum Outcome {
+    Done,
+    /// Went fine, but say so (the text didn't visibly appear anywhere).
+    Notice(String),
+    /// The text went in, but not as asked (the model failed; plain text pasted).
+    Warning(anyhow::Error),
+}
+
 async fn run(
     app: &AppHandle,
     rec: Recording,
     focused: &FocusedApp,
     kind: Kind,
-) -> anyhow::Result<Option<anyhow::Error>> {
+) -> anyhow::Result<Outcome> {
     let samples = tauri::async_runtime::spawn_blocking(move || rec.stop()).await?;
     let secs = samples.len() as f32 / WHISPER_RATE as f32;
     let peak = samples.iter().fold(0.0f32, |m, s| m.max(s.abs()));
@@ -203,7 +210,7 @@ async fn run(
         let _ = audio::to_wav(&samples).map(|wav| std::fs::write(dir.join("last-dictation.wav"), wav));
     }
     if secs < MIN_SPEECH_SECS {
-        return Ok(None);
+        return Ok(Outcome::Done);
     }
     if peak < SILENCE_PEAK {
         // Whisper invents short phrases for silence; don't paste those.
@@ -215,7 +222,7 @@ async fn run(
     let req = stt::Request::new(samples, &settings);
     let transcript = stt::transcribe(&settings, state.local.clone(), &state.models_dir, req).await?;
     if transcript.text.is_empty() {
-        return Ok(None);
+        return Ok(Outcome::Done);
     }
     let language = transcript.language.as_deref();
     let raw = transcript.text;
@@ -224,7 +231,7 @@ async fn run(
         let instruction = polish::strip_fillers(&raw, language);
         log::info!("command: {instruction:?}");
         rewrite_selection(app, &settings, focused, Task::Command(instruction), language).await?;
-        return Ok(None);
+        return Ok(Outcome::Done);
     }
 
     let summary = kind == Kind::Summary;
@@ -275,7 +282,23 @@ async fn run(
     }
     let latency_ms = started.elapsed().as_millis() as u64;
 
-    paste(&settings, text.clone()).await?;
+    // Into the open note instead of the focused app, when the user asked for that.
+    let capture = *state.capture.lock().unwrap();
+    let outcome = match capture {
+        Some(id) => {
+            let note = state.notes.lock().unwrap().append(id, &text);
+            let _ = app.emit("note-updated", note);
+            mode = format!("{mode} → note");
+            Outcome::Notice("Added to the note".into())
+        }
+        None => {
+            paste(&settings, text.clone()).await?;
+            match warning {
+                Some(w) => Outcome::Warning(w),
+                None => Outcome::Done,
+            }
+        }
+    };
 
     record(
         app,
@@ -290,7 +313,7 @@ async fn run(
             at: history::now(),
         },
     );
-    Ok(warning)
+    Ok(outcome)
 }
 
 fn engine_label(settings: &Settings) -> String {

@@ -26,7 +26,10 @@ record of what was built and why; the "done when" lines are what to check if som
 | Command Mode | Command hotkey: hold, speak the instruction, applied to the selection |
 | Model choice | 1.5B / 3B / 7B local, or any chat server |
 | Autostart | Yes |
-| Styles, Voice Profile, Scratchpad, Notetaker, MCP, teams | No (see below) |
+| Scratchpad | Notes tab: dictate into a note, pin, search, transforms with undo |
+| Prompt Engineer, Empathize | Transforms: prompt, friendlier, formal; Prompt also as a Format style |
+| Flow Bar language switch | Tray menu → Language |
+| Styles, Voice Profile, Notetaker, MCP, teams | No (see below) |
 
 ## Phase 1: trust the output (shipped in v0.2.0)
 
@@ -77,12 +80,23 @@ Still to measure: Medium on a fixed set of Dutch and English clips before making
 
 Done when: "make this more formal" on a selected paragraph works in Outlook and VS Code.
 
+## Phase 5: notes (shipped in v0.3.0)
+
+1. **Notes tab**: list, editor, pin, search, copy, delete; `notes.json`.
+2. **Dictate here**: a capture toggle routes dictations into the open note instead of pasting.
+3. **To note** on history entries; transforms on a whole note with one-step undo.
+4. **More transforms**: friendlier, formal, prompt engineer (also a Format style).
+5. **Tray language switch**.
+
+Not done from Scratchpad: images, tabs, version history (undo covers one step), sync.
+
 ## Next
 
 - Measure Medium and the command prompts on a fixed clip set per model size; promote Medium to
   the default for new installs once the 1.5B passes.
 - A modifier-only hotkey (hold Right-Ctrl) via a low-level keyboard hook.
 - Rich-text snippets where the target app accepts HTML on the clipboard.
+- Note version history (last N versions) and export to a .md file.
 - Vulkan GPU build for Intel Arc / AMD iGPUs; streaming partial results.
 
 ## Deferred or out of scope

@@ -57,6 +57,12 @@ pub enum Transform {
     Translate,
     /// About half the length, every fact kept.
     Shorter,
+    /// Warmer and more considerate, same content.
+    Friendlier,
+    /// Businesslike, same content.
+    Formal,
+    /// Rough thoughts into a structured prompt for an AI assistant.
+    Prompt,
 }
 
 /// Cleanup for one application, chosen by the focused window's executable.
@@ -87,6 +93,8 @@ pub enum FormatStyle {
     List,
     /// Time spent and subject, then what was done (for hour logs and tickets).
     Timelog,
+    /// A structured prompt for an AI assistant: goal, requirements, constraints.
+    Prompt,
 }
 
 /// The model that formats and summarizes: llama-server bundled with the app,

@@ -12,6 +12,7 @@
       <nav class="sidebar">
         <div class="brand"><span class="brand-dot"></span>TalyxelVoice</div>
         <button class="nav active" data-tab="home">Dictation</button>
+        <button class="nav" data-tab="notes">Notes</button>
         <button class="nav" data-tab="engine">Engine</button>
         <button class="nav" data-tab="cleanup">Cleanup &amp; summary</button>
         <button class="nav" data-tab="language">Language &amp; words</button>
@@ -45,6 +46,53 @@
           </div>
           <ul id="history" class="history"></ul>
           <p id="history-empty" class="empty">Nothing yet. Put your cursor in any text field and try the hotkey.</p>
+        </section>
+
+        <section class="tab wide" id="tab-notes">
+          <header>
+            <h1>Notes</h1>
+            <p class="muted">
+              A place to dictate into that isn't someone else's text field. Turn on <b>Dictate here</b> and every
+              dictation lands in the open note instead of being pasted.
+            </p>
+          </header>
+          <div class="notes">
+            <aside class="notes-list">
+              <div class="row">
+                <input id="notes-search" type="search" placeholder="Search notes…" />
+                <button id="note-new" class="btn primary">New</button>
+              </div>
+              <ul id="notes"></ul>
+              <p id="notes-empty" class="empty small">No notes yet.</p>
+            </aside>
+            <div class="note-editor" id="note-editor" hidden>
+              <input id="note-title" placeholder="Title (optional)" />
+              <textarea id="note-body" placeholder="Dictate or type…"></textarea>
+              <div class="note-tools">
+                <button id="note-capture" class="btn">Dictate here</button>
+                <span class="row">
+                  <select id="note-transform">
+                    <option value="polish">Polish</option>
+                    <option value="list">Turn into a list</option>
+                    <option value="shorter">Make it shorter</option>
+                    <option value="friendlier">Friendlier</option>
+                    <option value="formal">More formal</option>
+                    <option value="translate">Translate to English</option>
+                    <option value="prompt">Prompt engineer</option>
+                  </select>
+                  <button id="note-apply" class="btn">Apply</button>
+                  <button id="note-undo" class="btn ghost" hidden>Undo</button>
+                </span>
+                <span class="row note-tools-right">
+                  <button id="note-copy" class="btn ghost">Copy</button>
+                  <button id="note-pin" class="btn ghost">Pin</button>
+                  <button id="note-delete" class="btn ghost">Delete</button>
+                </span>
+              </div>
+              <p id="note-meta" class="muted small"></p>
+            </div>
+            <p id="note-none" class="empty">Pick a note, or start a new one.</p>
+          </div>
         </section>
 
         <section class="tab" id="tab-engine">
@@ -97,6 +145,7 @@
               <label><input type="radio" name="format-style" value="note" /> <span>Note</span></label>
               <label><input type="radio" name="format-style" value="list" /> <span>List</span></label>
               <label><input type="radio" name="format-style" value="timelog" /> <span>Time log</span></label>
+              <label><input type="radio" name="format-style" value="prompt" /> <span>Prompt</span></label>
             </div>
             <p class="muted small hint" id="format-style-hint"></p>
           </div>
@@ -122,6 +171,9 @@
                   <option value="list">Turn into a list</option>
                   <option value="translate">Translate to English</option>
                   <option value="shorter">Make it shorter</option>
+                  <option value="friendlier">Friendlier</option>
+                  <option value="formal">More formal</option>
+                  <option value="prompt">Prompt engineer: thoughts into a structured AI prompt</option>
                 </select>
               </label>
             </div>
