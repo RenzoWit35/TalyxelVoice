@@ -17,7 +17,8 @@ json("package.json");
 json("src-tauri/tauri.conf.json");
 edit("src-tauri/Cargo.toml", (s) => s.replace(/^version = ".*"$/m, `version = "${version}"`));
 edit("src-tauri/Cargo.lock", (s) =>
-  s.replace(/(name = "talyxel-voice"\nversion = )".*"/, `$1"${version}"`),
+  // \r?: a Windows checkout has CRLF line endings.
+  s.replace(/(name = "talyxel-voice"\r?\nversion = )".*"/, `$1"${version}"`),
 );
 
 const git = (...args) => execFileSync("git", args, { stdio: "inherit" });
