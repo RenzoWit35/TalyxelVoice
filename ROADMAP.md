@@ -97,7 +97,7 @@ Not done from Scratchpad: images, tabs, version history (undo covers one step), 
 - A modifier-only hotkey (hold Right-Ctrl) via a low-level keyboard hook.
 - Rich-text snippets where the target app accepts HTML on the clipboard.
 - Note version history (last N versions) and export to a .md file.
-- Vulkan GPU build for Intel Arc / AMD iGPUs; streaming partial results.
+- Streaming partial results.
 
 ## Deferred or out of scope
 

@@ -1,11 +1,14 @@
 # Builds, signs and publishes a release (installer + latest.json for the
 # in-app updater) whenever a v* tag is pushed. Create one with
 # `npm run release -- 0.2.0`, then `git push --follow-tags`.
+# Pull requests (and manual runs off a branch) build the same installer
+# without publishing; it's attached to the run as an artifact to try out.
 name: Release
 
 on:
   push:
     tags: ["v*"]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -19,6 +22,9 @@ jobs:
       # override variables that are already set, so these win on CI.
       CMAKE: cmake
       LIBCLANG_PATH: C:\Program Files\LLVM\bin
+      # whisper.cpp's Vulkan shader generator builds in folders nested so deep
+      # that under the checkout's target/ its paths pass MSVC's 260 limit.
+      CARGO_TARGET_DIR: D:\t
     steps:
       - uses: actions/checkout@v5
 
@@ -31,11 +37,19 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          # The target is relative to src-tauri: D:\t, as CARGO_TARGET_DIR.
+          workspaces: src-tauri -> ../../../../t
 
       # whisper.cpp must build with the Ninja generator (see .cargo/config.toml).
       - name: Install Ninja
         run: choco install ninja -y --no-progress
+
+      # whisper.cpp's Vulkan backend compiles its shaders with the SDK's glslc
+      # and links its vulkan-1.lib (found through VULKAN_SDK).
+      - uses: jakoch/install-vulkan-sdk-action@v1.7.0
+        with:
+          vulkan_version: 1.4.363.0
+          cache: true
 
       - run: npm ci
 
@@ -45,8 +59,15 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: v__VERSION__
+          # An empty tag name builds without publishing.
+          tagName: ${{ startsWith(github.ref, 'refs/tags/v') && 'v__VERSION__' || '' }}
           releaseName: TalyxelVoice v__VERSION__
           releaseBody: Installs automatically from the app; see the commits for what changed.
           releaseDraft: false
           prerelease: false
+
+      - if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: TalyxelVoice-installer
+          path: ${{ env.CARGO_TARGET_DIR }}\release\bundle\nsis\*.exe

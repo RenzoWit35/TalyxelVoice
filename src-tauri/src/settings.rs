@@ -154,6 +154,9 @@ pub struct Settings {
     pub engine: Engine,
     /// ggml model name, stored as `models/ggml-<name>.bin`.
     pub local_model: String,
+    /// Run whisper and the text model on the graphics card (Vulkan) when
+    /// there is one.
+    pub gpu: bool,
     pub remote: RemoteSettings,
     /// Whisper language code, or "auto".
     pub language: String,
@@ -193,6 +196,7 @@ impl Default for Settings {
             text_model: TextModelSettings::default(),
             engine: Engine::Local,
             local_model: "small-q5_1".into(),
+            gpu: true,
             remote: RemoteSettings::default(),
             language: "auto".into(),
             spoken_languages: Vec::new(),

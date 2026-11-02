@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context};
@@ -35,19 +36,31 @@ impl Request {
 /// several times slower than later ones.
 #[derive(Default)]
 pub struct LocalWhisper {
-    loaded: Mutex<Option<(PathBuf, WhisperState)>>,
+    /// The model, whether it's on the GPU, and its state.
+    loaded: Mutex<Option<(PathBuf, bool, WhisperState)>>,
+    /// Settings' `gpu`; a change reloads the model on the next dictation.
+    use_gpu: AtomicBool,
 }
 
 impl LocalWhisper {
+    pub fn set_gpu(&self, on: bool) {
+        self.use_gpu.store(on, Ordering::Relaxed);
+    }
+
     pub fn transcribe(&self, model: &Path, req: &Request) -> anyhow::Result<Transcript> {
+        let gpu = crate::gpu::pick().filter(|_| self.use_gpu.load(Ordering::Relaxed));
         let mut guard = self.loaded.lock().unwrap();
-        if guard.as_ref().map(|(p, _)| p.as_path()) != Some(model) {
+        if guard.as_ref().map(|(p, g, _)| (p.as_path(), *g)) != Some((model, gpu.is_some())) {
             *guard = None;
             if !model.exists() {
                 bail!("model {} isn't downloaded yet — get it in Settings", model.display());
             }
             let mut ctx_params = WhisperContextParameters::default();
             ctx_params.flash_attn(true);
+            ctx_params.use_gpu(gpu.is_some());
+            if let Some(gpu) = gpu {
+                ctx_params.gpu_device(gpu.index);
+            }
             let ctx = WhisperContext::new_with_params(
                 model.to_str().context("model path isn't UTF-8")?,
                 ctx_params,
@@ -55,9 +68,9 @@ impl LocalWhisper {
             .map_err(|e| anyhow!("failed to load model: {e}"))?;
             // The state keeps the context alive.
             let state = ctx.create_state().map_err(|e| anyhow!("{e}"))?;
-            *guard = Some((model.to_owned(), state));
+            *guard = Some((model.to_owned(), gpu.is_some(), state));
         }
-        let (_, state) = guard.as_mut().unwrap();
+        let (_, _, state) = guard.as_mut().unwrap();
 
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
         params.set_language(Some(req.language.as_deref().unwrap_or("auto")));
