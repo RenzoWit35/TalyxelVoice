@@ -22,6 +22,9 @@ jobs:
       # override variables that are already set, so these win on CI.
       CMAKE: cmake
       LIBCLANG_PATH: C:\Program Files\LLVM\bin
+      # whisper.cpp's Vulkan shader generator builds in folders nested so deep
+      # that under the checkout's target/ its paths pass MSVC's 260 limit.
+      CARGO_TARGET_DIR: D:\t
     steps:
       - uses: actions/checkout@v5
 
@@ -34,7 +37,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          # The target is relative to src-tauri: D:\t, as CARGO_TARGET_DIR.
+          workspaces: src-tauri -> ../../../../t
 
       # whisper.cpp must build with the Ninja generator (see .cargo/config.toml).
       - name: Install Ninja
@@ -66,4 +70,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: TalyxelVoice-installer
-          path: src-tauri/target/release/bundle/nsis/*.exe
+          path: ${{ env.CARGO_TARGET_DIR }}\release\bundle\nsis\*.exe

@@ -37,7 +37,10 @@ for whisper's bindgen), the **Vulkan SDK** (`winget install KhronosGroup.VulkanS
 backend; it sets `VULKAN_SDK`), and `ninja.exe` on PATH (VS Build Tools ships one under
 `Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja`). `src-tauri/.cargo/config.toml` explains the
 build settings; the short version is that without Ninja the `cmake` crate builds whisper.cpp
-**unoptimized** under MSVC, which makes it ~50x slower.
+**unoptimized** under MSVC, which makes it ~50x slower. Whisper's Vulkan shader generator builds in
+deeply nested folders, so keep `target/` under ~40 characters of path (or set `CARGO_TARGET_DIR`
+to something like `C:\t`); past MSVC's 260-character limit it fails with "Cannot open compiler
+generated file".
 
 ```bash
 npm install
