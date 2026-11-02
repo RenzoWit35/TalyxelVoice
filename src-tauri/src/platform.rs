@@ -22,7 +22,7 @@ mod imp {
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
-        KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_CONTROL, VK_LWIN, VK_MENU,
+        KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_C, VK_CONTROL, VK_LWIN, VK_MENU,
         VK_RWIN, VK_SHIFT, VK_V,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -90,16 +90,19 @@ mod imp {
         }
     }
 
-    pub fn send_paste() {
-        let inputs = [
-            key(VK_CONTROL, false),
-            key(VK_V, false),
-            key(VK_V, true),
-            key(VK_CONTROL, true),
-        ];
+    fn send_ctrl(vk: VIRTUAL_KEY) {
+        let inputs = [key(VK_CONTROL, false), key(vk, false), key(vk, true), key(VK_CONTROL, true)];
         unsafe {
             SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
         }
+    }
+
+    pub fn send_paste() {
+        send_ctrl(VK_V);
+    }
+
+    pub fn send_copy() {
+        send_ctrl(VK_C);
     }
 
     pub fn make_overlay(hwnd: *mut std::ffi::c_void) {
@@ -181,6 +184,9 @@ mod imp {
     pub fn send_paste() {
         log::warn!("paste simulation not implemented on this platform yet");
     }
+    pub fn send_copy() {
+        log::warn!("copy simulation not implemented on this platform yet");
+    }
     pub fn make_overlay(_: *mut std::ffi::c_void) {}
     pub fn show_without_focus(_: *mut std::ffi::c_void) {}
     pub fn hide_window(_: *mut std::ffi::c_void) {}
@@ -190,6 +196,31 @@ mod imp {
 }
 
 pub use imp::*;
+
+/// What the focused app has selected, read by simulating Ctrl+C. `None`
+/// when nothing was selected (the clipboard stayed empty). The user's
+/// clipboard text is put back afterwards.
+pub fn copy_selection() -> anyhow::Result<Option<String>> {
+    let mut clipboard = arboard::Clipboard::new()?;
+    let previous = clipboard.get_text().ok();
+    let _ = clipboard.clear();
+    wait_for_modifiers_released();
+    send_copy();
+    let mut selection = None;
+    for _ in 0..25 {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        if let Ok(text) = clipboard.get_text() {
+            if !text.is_empty() {
+                selection = Some(text);
+                break;
+            }
+        }
+    }
+    if let Some(prev) = previous {
+        let _ = clipboard.set_text(prev);
+    }
+    Ok(selection)
+}
 
 /// Puts `text` into the focused app via the clipboard, then puts back
 /// whatever the user had copied.

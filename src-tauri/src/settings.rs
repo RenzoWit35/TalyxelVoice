@@ -45,6 +45,20 @@ pub enum Polish {
     Format,
 }
 
+/// What the transform hotkey does to the selected text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Transform {
+    /// Grammar, spelling and flow; same meaning, tone and length.
+    Polish,
+    /// One bullet per point.
+    List,
+    /// Into English.
+    Translate,
+    /// About half the length, every fact kept.
+    Shorter,
+}
+
 /// Cleanup for one application, chosen by the focused window's executable.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -119,6 +133,11 @@ pub struct Settings {
     pub undo_hotkey: String,
     /// Pastes the last dictation again.
     pub repaste_hotkey: String,
+    /// Rewrites the selected text with `transform`.
+    pub transform_hotkey: String,
+    pub transform: Transform,
+    /// Hold, say what to do with the selected text, release.
+    pub command_hotkey: String,
     pub polish: Polish,
     pub format_style: FormatStyle,
     /// Overrides `polish`/`format_style` for particular applications.
@@ -157,6 +176,9 @@ impl Default for Settings {
             summary_hotkey: "Alt+Shift+Space".into(),
             undo_hotkey: "Ctrl+Alt+Z".into(),
             repaste_hotkey: "Ctrl+Alt+V".into(),
+            transform_hotkey: "Ctrl+Alt+P".into(),
+            transform: Transform::Polish,
+            command_hotkey: "Ctrl+Alt+Space".into(),
             polish: Polish::Clean,
             format_style: FormatStyle::Text,
             app_modes: Vec::new(),

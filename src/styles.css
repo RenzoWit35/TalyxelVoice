@@ -118,6 +118,8 @@ textarea { resize: vertical; font-family: "Cascadia Code", Consolas, monospace; 
 .history p { white-space: pre-wrap; overflow-wrap: anywhere; }
 .meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--muted); }
 .history .original { margin-top: 8px; padding: 8px 10px; border-left: 3px solid var(--gold-line); background: var(--gold-soft); border-radius: 4px; }
+.history del { background: rgb(194 53 43 / 0.18); text-decoration: line-through; text-decoration-color: var(--bad); border-radius: 3px; }
+.history ins { background: rgb(31 138 76 / 0.2); text-decoration: none; border-radius: 3px; }
 .history .original[hidden] { display: none; }
 .history .mode { color: var(--accent); }
 .history-bar { margin: 24px 0 10px; }

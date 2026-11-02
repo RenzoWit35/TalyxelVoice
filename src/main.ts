@@ -16,6 +16,9 @@ interface Settings {
   summary_hotkey: string;
   undo_hotkey: string;
   repaste_hotkey: string;
+  transform_hotkey: string;
+  transform: Transform;
+  command_hotkey: string;
   polish: Polish;
   format_style: FormatStyle;
   app_modes: AppMode[];
@@ -35,7 +38,8 @@ interface Settings {
   history_days: number;
 }
 
-type HotkeyField = "hotkey" | "summary_hotkey" | "undo_hotkey" | "repaste_hotkey";
+type Transform = "polish" | "list" | "translate" | "shorter";
+type HotkeyField = "hotkey" | "summary_hotkey" | "undo_hotkey" | "repaste_hotkey" | "transform_hotkey" | "command_hotkey";
 
 interface Snippet {
   trigger: string;
@@ -117,6 +121,59 @@ function renderBadge() {
   $("hotkey-hint").textContent = settings.hotkey;
   $("summary-hint").textContent = settings.summary_hotkey || "(off)";
   $("undo-hint").textContent = settings.undo_hotkey || "(off)";
+  $("transform-hint").textContent = settings.transform_hotkey || "(off)";
+  $("command-hint").textContent = settings.command_hotkey || "(off)";
+}
+
+// Word-level diff (longest common subsequence) of the original against what
+// went in, as <del>/<ins> runs: the "View diff" of a rewrite.
+function renderDiff(from: string, to: string) {
+  const a = from.split(/(\s+)/).filter(Boolean);
+  const b = to.split(/(\s+)/).filter(Boolean);
+  const n = a.length;
+  const m = b.length;
+  const frag = document.createDocumentFragment();
+  if (n * m > 250_000) {
+    // Too long for a quadratic diff; show it plainly.
+    frag.append(from);
+    return frag;
+  }
+  const lcs: Uint16Array[] = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+    }
+  }
+  let i = 0;
+  let j = 0;
+  const push = (tag: "del" | "ins" | null, text: string) => {
+    if (!text) return;
+    if (!tag) return frag.append(text);
+    const el = document.createElement(tag);
+    el.textContent = text;
+    frag.append(el);
+  };
+  let del = "";
+  let ins = "";
+  const flush = () => {
+    push("del", del);
+    push("ins", ins);
+    del = ins = "";
+  };
+  while (i < n || j < m) {
+    if (i < n && j < m && a[i] === b[j]) {
+      flush();
+      push(null, a[i]);
+      i++;
+      j++;
+    } else if (j < m && (i >= n || lcs[i][j + 1] >= lcs[i + 1][j])) {
+      ins += b[j++];
+    } else {
+      del += a[i++];
+    }
+  }
+  flush();
+  return frag;
 }
 
 const POLISH_HINTS: Record<Polish, string> = {
@@ -316,14 +373,18 @@ function historyItem(h: HistoryEntry) {
   if (changed) {
     const original = document.createElement("p");
     original.className = "original";
-    original.textContent = h.raw;
     original.hidden = true;
+    let rendered = false;
     const toggle = document.createElement("button");
     toggle.className = "btn ghost";
-    toggle.textContent = "Original";
+    toggle.textContent = "Changes";
     toggle.onclick = () => {
+      if (!rendered) {
+        original.replaceChildren(renderDiff(h.raw, h.text));
+        rendered = true;
+      }
       original.hidden = !original.hidden;
-      toggle.textContent = original.hidden ? "Original" : "Hide original";
+      toggle.textContent = original.hidden ? "Changes" : "Hide changes";
     };
     actions.prepend(toggle, copyButton("Copy original", h.raw));
     li.append(original);
@@ -486,6 +547,11 @@ function bindInputs() {
   bindHotkey("summary-hotkey", "summary_hotkey");
   bindHotkey("undo-hotkey", "undo_hotkey");
   bindHotkey("repaste-hotkey", "repaste_hotkey");
+  bindHotkey("transform-hotkey", "transform_hotkey");
+  bindHotkey("command-hotkey", "command_hotkey");
+  const transform = $<HTMLSelectElement>("transform");
+  transform.value = settings.transform;
+  transform.onchange = () => ((settings.transform = transform.value as Transform), save(true));
 
   document.querySelectorAll<HTMLInputElement>('input[name="polish"]').forEach((r) =>
     r.addEventListener("change", () => {

@@ -40,6 +40,8 @@ pub struct AppState {
 enum Action {
     Dictate,
     Summary,
+    Command,
+    Transform,
     Undo,
     Repaste,
 }
@@ -241,6 +243,8 @@ fn register_hotkeys(app: &AppHandle, settings: &Settings) -> CmdResult<HashMap<u
     let wanted = [
         (Action::Dictate, settings.hotkey.as_str()),
         (Action::Summary, settings.summary_hotkey.as_str()),
+        (Action::Command, settings.command_hotkey.as_str()),
+        (Action::Transform, settings.transform_hotkey.as_str()),
         (Action::Undo, settings.undo_hotkey.as_str()),
         (Action::Repaste, settings.repaste_hotkey.as_str()),
     ];
@@ -273,6 +277,8 @@ fn on_shortcut(app: &AppHandle, shortcut: &Shortcut, pressed: bool) {
     match action {
         Some(Action::Dictate) => pipeline::on_hotkey(app, pressed, Kind::Dictate),
         Some(Action::Summary) => pipeline::on_hotkey(app, pressed, Kind::Summary),
+        Some(Action::Command) => pipeline::on_hotkey(app, pressed, Kind::Command),
+        Some(Action::Transform) if pressed => pipeline::transform(app),
         Some(Action::Undo) if pressed => pipeline::paste_last(app, true),
         Some(Action::Repaste) if pressed => pipeline::paste_last(app, false),
         _ => {}

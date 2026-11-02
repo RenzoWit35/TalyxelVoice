@@ -21,13 +21,20 @@ const MIN_SPEECH_SECS: f32 = 0.3;
 const SILENCE_PEAK: f32 = 0.01;
 
 /// Which hotkey started a recording, which decides what the words become.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Kind {
     /// Pasted as text, after the configured cleanup.
     Dictate,
     /// Pasted as a few summary bullets.
     Summary,
+    /// Not pasted: it's an instruction, applied to the selected text.
+    Command,
 }
+
+/// Selections longer than this aren't sent to the model: too slow locally,
+/// and past what the prompt examples cover.
+const MAX_SELECTION_WORDS: usize = 3000;
 
 pub enum Dictation {
     Idle,
@@ -44,10 +51,11 @@ pub enum Dictation {
 #[derive(Clone, Serialize)]
 #[serde(tag = "state", rename_all = "lowercase")]
 enum Pill {
-    Listening { hands_free: bool, summary: bool },
+    Listening { hands_free: bool, kind: Kind },
     Level { level: f32 },
     Transcribing,
     Polishing { summary: bool },
+    Working { message: String },
     Info { message: String },
     Error { message: String },
 }
@@ -81,7 +89,6 @@ pub fn on_hotkey(app: &AppHandle, pressed: bool, kind: Kind) {
             return;
         }
     }
-    let summary = kind == Kind::Summary;
     match (&mut *dictation, pressed) {
         (Dictation::Idle, true) => {
             let focused = platform::focused_app();
@@ -97,16 +104,12 @@ pub fn on_hotkey(app: &AppHandle, pressed: bool, kind: Kind) {
                         app: focused,
                     };
                     // Load the text model while the user talks.
-                    let needs_model = summary || matches!(polish, Polish::Medium | Polish::Format);
-                    if needs_model && settings.text_model.engine == Engine::Local {
-                        let model = crate::settings::text_model_path(
-                            &state.models_dir,
-                            &settings.text_model.local_model,
-                        );
-                        state.text_model.prestart(model);
+                    let needs_model = kind != Kind::Dictate || matches!(polish, Polish::Medium | Polish::Format);
+                    if needs_model {
+                        prestart_text_model(&state, &settings);
                     }
                     drop(dictation);
-                    pill(app, Pill::Listening { hands_free: false, summary });
+                    pill(app, Pill::Listening { hands_free: false, kind });
                     show_pill(app);
                     spawn_level_meter(app.clone());
                 }
@@ -120,7 +123,7 @@ pub fn on_hotkey(app: &AppHandle, pressed: bool, kind: Kind) {
             if started.elapsed() < TAP {
                 *hands_free = true;
                 drop(dictation);
-                pill(app, Pill::Listening { hands_free: true, summary });
+                pill(app, Pill::Listening { hands_free: true, kind });
             } else {
                 drop(dictation);
                 finish(app.clone());
@@ -132,6 +135,13 @@ pub fn on_hotkey(app: &AppHandle, pressed: bool, kind: Kind) {
         }
         // Key repeat, the release after a hands-free stop, or presses while busy.
         _ => {}
+    }
+}
+
+fn prestart_text_model(state: &AppState, settings: &Settings) {
+    if settings.text_model.engine == Engine::Local {
+        let model = crate::settings::text_model_path(&state.models_dir, &settings.text_model.local_model);
+        state.text_model.prestart(model);
     }
 }
 
@@ -210,6 +220,13 @@ async fn run(
     let language = transcript.language.as_deref();
     let raw = transcript.text;
 
+    if kind == Kind::Command {
+        let instruction = polish::strip_fillers(&raw, language);
+        log::info!("command: {instruction:?}");
+        rewrite_selection(app, &settings, focused, Task::Command(instruction), language).await?;
+        return Ok(None);
+    }
+
     let summary = kind == Kind::Summary;
     let (polish, format_style) = settings.mode_for(&focused.exe);
     // Dictionary fixes and spoken punctuation are the user's own rules, so
@@ -242,14 +259,14 @@ async fn run(
     if let Some(task) = task {
         pill(app, Pill::Polishing { summary: task == Task::Summarize });
         let cfg = &settings.text_model;
-        match polish::apply(cfg, &state.text_model, &state.models_dir, task, &text, language).await {
+        match polish::apply(cfg, &state.text_model, &state.models_dir, &task, &text, language).await {
             Ok(polished) => text = polished,
             Err(e) => {
                 log::warn!("{task:?} failed: {e:#}");
                 let what = match task {
                     Task::Summarize => "summarize",
                     Task::Cleanup => "clean up",
-                    Task::Format(_) => "format",
+                    _ => "format",
                 };
                 warning = Some(anyhow::anyhow!("Couldn't {what} ({e}); pasted the plain text"));
                 mode = "clean (model failed)".to_owned();
@@ -281,6 +298,90 @@ fn engine_label(settings: &Settings) -> String {
         Engine::Local => format!("local · {}", settings.local_model),
         Engine::Remote => format!("server · {}", settings.remote.model),
     }
+}
+
+fn text_model_label(settings: &Settings) -> String {
+    let cfg = &settings.text_model;
+    match cfg.engine {
+        Engine::Local => format!("local · {}", cfg.local_model),
+        Engine::Remote => format!("server · {}", if cfg.remote.model.is_empty() { "default" } else { &cfg.remote.model }),
+    }
+}
+
+/// The transform hotkey: rewrites the selected text with the configured preset.
+pub fn transform(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    {
+        let mut dictation = state.dictation.lock().unwrap();
+        if !matches!(*dictation, Dictation::Idle) {
+            return;
+        }
+        *dictation = Dictation::Busy;
+    }
+    let settings = state.settings.lock().unwrap().clone();
+    prestart_text_model(&state, &settings);
+    let focused = platform::focused_app();
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let task = Task::Transform(settings.transform);
+        let result = rewrite_selection(&app, &settings, &focused, task, None).await;
+        *app.state::<AppState>().dictation.lock().unwrap() = Dictation::Idle;
+        match result {
+            Ok(()) => hide_pill(&app),
+            Err(e) => report_error(app.clone(), e.to_string()),
+        }
+    });
+}
+
+/// Copies what the focused app has selected, runs `task` on it, and pastes
+/// the result over the selection. The original lands in the history, so the
+/// undo hotkey brings it back.
+async fn rewrite_selection(
+    app: &AppHandle,
+    settings: &Settings,
+    focused: &FocusedApp,
+    task: Task,
+    language: Option<&str>,
+) -> anyhow::Result<()> {
+    let started = Instant::now();
+    let selection = tauri::async_runtime::spawn_blocking(platform::copy_selection).await??;
+    let Some(selection) = selection.filter(|s| !s.trim().is_empty()) else {
+        anyhow::bail!("Select some text first");
+    };
+    let words = selection.split_whitespace().count();
+    if words > MAX_SELECTION_WORDS {
+        anyhow::bail!("That's {words} words; select at most {MAX_SELECTION_WORDS}");
+    }
+    let message = match &task {
+        Task::Command(instruction) => format!("“{instruction}”"),
+        Task::Transform(t) => format!("{t:?}"),
+        _ => "Working".to_owned(),
+    };
+    pill(app, Pill::Working { message });
+    show_pill(app);
+
+    let state = app.state::<AppState>();
+    let cfg = &settings.text_model;
+    let text = polish::apply(cfg, &state.text_model, &state.models_dir, &task, &selection, language)
+        .await
+        .map_err(|e| anyhow::anyhow!("Couldn't rewrite it: {e}"))?;
+    let latency_ms = started.elapsed().as_millis() as u64;
+
+    paste(settings, text.clone()).await?;
+    record(
+        app,
+        settings,
+        HistoryEntry {
+            text,
+            raw: selection,
+            mode: task.label(),
+            app: focused.exe.clone(),
+            engine: text_model_label(settings),
+            latency_ms,
+            at: history::now(),
+        },
+    );
+    Ok(())
 }
 
 async fn paste(settings: &Settings, text: String) -> anyhow::Result<()> {

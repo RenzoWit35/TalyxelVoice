@@ -33,6 +33,8 @@
               Tap it once for hands-free; tap again to stop.
               <kbd id="summary-hint">Alt+Shift+Space</kbd> works the same but pastes a summary.
               Changed your mind about a cleanup? <kbd id="undo-hint">Ctrl+Alt+Z</kbd> pastes what you actually said.
+              Select text and press <kbd id="transform-hint">Ctrl+Alt+P</kbd> to polish it, or hold
+              <kbd id="command-hint">Ctrl+Alt+Space</kbd> and say what to do with it.
             </p>
           </header>
           <div class="row history-bar">
@@ -102,6 +104,31 @@
           <label class="field">Summary hotkey <span class="muted small">hold it, talk, and a short summary is pasted</span>
             <input id="summary-hotkey" class="hotkey" readonly />
           </label>
+
+          <div class="card">
+            <h2>Edit selected text</h2>
+            <p class="muted small">
+              Select text in any app, then press a hotkey. The text model rewrites it in place; the original is in
+              the history, and the undo hotkey pastes it back. Up to 3000 words. The 1.5B model manages Polish and
+              List; for commands, use the 3B model or a server.
+            </p>
+            <div class="grid2">
+              <label class="field">Transform hotkey
+                <input id="transform-hotkey" class="hotkey" readonly />
+              </label>
+              <label class="field">What it does
+                <select id="transform">
+                  <option value="polish">Polish: grammar and flow, same meaning</option>
+                  <option value="list">Turn into a list</option>
+                  <option value="translate">Translate to English</option>
+                  <option value="shorter">Make it shorter</option>
+                </select>
+              </label>
+            </div>
+            <label class="field">Command hotkey <span class="muted small">hold it, say "make this more formal", release</span>
+              <input id="command-hotkey" class="hotkey" readonly />
+            </label>
+          </div>
 
           <div class="card">
             <h2>Per application</h2>
