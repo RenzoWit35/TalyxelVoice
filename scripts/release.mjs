@@ -23,5 +23,6 @@ edit("src-tauri/Cargo.lock", (s) =>
 const git = (...args) => execFileSync("git", args, { stdio: "inherit" });
 git("add", "package.json", "src-tauri/tauri.conf.json", "src-tauri/Cargo.toml", "src-tauri/Cargo.lock");
 git("commit", "-m", `Release v${version}`);
-git("tag", `v${version}`);
+// Annotated, because `git push --follow-tags` skips lightweight tags.
+git("tag", "-a", `v${version}`, "-m", `v${version}`);
 console.log(`\nTagged v${version}. Publish it with: git push --follow-tags`);
