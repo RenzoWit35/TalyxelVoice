@@ -28,16 +28,16 @@
         <section class="tab active" id="tab-home">
           <header>
             <h1>Dictate anywhere</h1>
-            <p class="muted">
-              Hold <kbd id="hotkey-hint">Ctrl+Shift+Space</kbd> and speak, release to paste.
-              Tap it once for hands-free; tap again to stop.
-              <kbd id="summary-hint">Alt+Shift+Space</kbd> works the same but pastes a summary.
-              Changed your mind about a cleanup? <kbd id="undo-hint">Ctrl+Alt+Z</kbd> pastes what you actually said.
-              Select text and press <kbd id="transform-hint">Ctrl+Alt+P</kbd> to polish it, or hold
-              <kbd id="command-hint">Ctrl+Alt+Space</kbd> and say what to do with it.
-            </p>
+            <p class="muted">Put your cursor in any text field, hold the hotkey, talk, let go.</p>
           </header>
-          <div class="row history-bar">
+          <ul class="keys card">
+            <li><kbd id="hotkey-hint">Ctrl+Shift+Space</kbd><span>Hold to dictate. Tap once for hands-free, tap again to stop.</span></li>
+            <li><kbd id="summary-hint">Alt+Shift+Space</kbd><span>Same, but pastes a short summary.</span></li>
+            <li><kbd id="transform-hint">Ctrl+Alt+P</kbd><span>Polishes the text you have selected.</span></li>
+            <li><kbd id="command-hint">Ctrl+Alt+Space</kbd><span>Hold and say what to do with the selection.</span></li>
+            <li><kbd id="undo-hint">Ctrl+Alt+Z</kbd><span>Pastes what you actually said, before any cleanup.</span></li>
+          </ul>
+          <div class="history-bar">
             <h2>Recent</h2>
             <span id="history-stats" class="muted small"></span>
             <input id="history-search" type="search" placeholder="Search…" />
