@@ -1,0 +1,17 @@
+[env]
+# whisper-rs-sys generates its bindings with bindgen; its bundled ones are for Linux.
+LIBCLANG_PATH = "C:\\Program Files\\LLVM\\bin"
+# ggml's native CPU detection finds nothing under MSVC and falls back to scalar
+# code (~20x slower). Target the AVX2 baseline every x86 CPU since 2013 has.
+GGML_NATIVE = "OFF"
+GGML_AVX = "ON"
+GGML_AVX2 = "ON"
+GGML_FMA = "ON"
+GGML_F16C = "ON"
+# With the Visual Studio generator the cmake crate overwrites
+# CMAKE_C(XX)_FLAGS_RELEASE and strips every /O flag, so whisper.cpp builds
+# unoptimized (~50x slower). Ninja keeps CMake's own /O2 release flags.
+# Needs ninja.exe on PATH (VS Build Tools ships one under CMake\Ninja).
+CMAKE_GENERATOR = "Ninja"
+# CMake ships with VS Build Tools but isn't on PATH.
+CMAKE = "C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe"

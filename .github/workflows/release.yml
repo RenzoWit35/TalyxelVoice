@@ -1,0 +1,52 @@
+# Builds, signs and publishes a release (installer + latest.json for the
+# in-app updater) whenever a v* tag is pushed. Create one with
+# `npm run release -- 0.2.0`, then `git push --follow-tags`.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      # .cargo/config.toml points these at a local VS install; [env] doesn't
+      # override variables that are already set, so these win on CI.
+      CMAKE: cmake
+      LIBCLANG_PATH: C:\Program Files\LLVM\bin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # whisper.cpp must build with the Ninja generator (see .cargo/config.toml).
+      - name: Install Ninja
+        run: choco install ninja -y --no-progress
+
+      - run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: v__VERSION__
+          releaseName: TalyxelVoice v__VERSION__
+          releaseBody: Installs automatically from the app; see the commits for what changed.
+          releaseDraft: false
+          prerelease: false

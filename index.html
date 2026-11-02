@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <title>TalyxelVoice</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+  <body>
+    <div class="app">
+      <nav class="sidebar">
+        <div class="brand"><span class="brand-dot"></span>TalyxelVoice</div>
+        <button class="nav active" data-tab="home">Dictation</button>
+        <button class="nav" data-tab="engine">Engine</button>
+        <button class="nav" data-tab="language">Language &amp; words</button>
+        <button class="nav" data-tab="general">General</button>
+        <div class="sidebar-foot" id="engine-badge"></div>
+      </nav>
+
+      <main>
+        <div id="update-banner" class="banner" hidden>
+          <span id="update-banner-text"></span>
+          <button id="update-banner-install" class="btn primary">Restart &amp; update</button>
+        </div>
+        <section class="tab active" id="tab-home">
+          <header>
+            <h1>Dictate anywhere</h1>
+            <p class="muted">
+              Hold <kbd id="hotkey-hint">Ctrl+Shift+Space</kbd> and speak, release to paste.
+              Tap it once for hands-free; tap again to stop.
+            </p>
+          </header>
+          <h2>Recent</h2>
+          <ul id="history" class="history"></ul>
+          <p id="history-empty" class="empty">Nothing yet. Put your cursor in any text field and try the hotkey.</p>
+        </section>
+
+        <section class="tab" id="tab-engine">
+          <header>
+            <h1>Engine</h1>
+            <p class="muted">Run whisper on this machine, or send audio to your own server running a bigger model.</p>
+          </header>
+          <div class="segmented" role="radiogroup">
+            <label><input type="radio" name="engine" value="local" /> <span>On this device</span></label>
+            <label><input type="radio" name="engine" value="remote" /> <span>My server</span></label>
+          </div>
+
+          <div id="engine-local" class="card">
+            <h2>Local models</h2>
+            <p class="muted small">Bigger is more accurate and slower. On a CPU, <b>base</b> or <b>small-q5_1</b> is a good start.</p>
+            <ul id="models" class="models"></ul>
+          </div>
+
+          <div id="engine-remote" class="card">
+            <h2>Server</h2>
+            <p class="muted small">
+              Any OpenAI-compatible <code>/v1/audio/transcriptions</code> endpoint: speaches / faster-whisper-server,
+              whisper.cpp <code>server --inference-path /v1/audio/transcriptions</code>, or a hosted API.
+            </p>
+            <label class="field">URL<input id="remote-url" placeholder="http://my-server:8000" /></label>
+            <label class="field">Model<input id="remote-model" placeholder="Systran/faster-whisper-large-v3" /></label>
+            <label class="field">API key <span class="muted small">(optional)</span><input id="remote-key" type="password" autocomplete="off" /></label>
+            <div class="row">
+              <button id="remote-test" class="btn">Test connection</button>
+              <span id="remote-status" class="status"></span>
+            </div>
+          </div>
+        </section>
+
+        <section class="tab" id="tab-language">
+          <header>
+            <h1>Language &amp; words</h1>
+            <p class="muted">Tell whisper what you speak and which words it keeps getting wrong.</p>
+          </header>
+          <label class="field">Primary language
+            <select id="language">
+              <option value="auto">Detect automatically</option>
+              <option value="en">English</option>
+              <option value="nl">Dutch</option>
+              <option value="de">German</option>
+              <option value="fr">French</option>
+              <option value="es">Spanish</option>
+              <option value="it">Italian</option>
+              <option value="pt">Portuguese</option>
+              <option value="pl">Polish</option>
+              <option value="tr">Turkish</option>
+              <option value="uk">Ukrainian</option>
+              <option value="ja">Japanese</option>
+              <option value="zh">Chinese</option>
+            </select>
+            <span class="muted small">On-device, picking a language is about twice as fast as detecting it on every dictation.</span>
+          </label>
+          <label class="field">Languages you mix <span class="muted small">comma-separated, e.g. Dutch, English</span>
+            <input id="spoken-languages" placeholder="Dutch, English" />
+          </label>
+          <label class="field">Personal dictionary <span class="muted small">one per line: names, products, jargon</span>
+            <textarea id="dictionary" rows="8" placeholder="Talyxel&#10;Tauri&#10;Kubernetes"></textarea>
+          </label>
+        </section>
+
+        <section class="tab" id="tab-general">
+          <header><h1>General</h1></header>
+          <label class="field">Push-to-talk hotkey <span class="muted small">click, then press the combination</span>
+            <input id="hotkey" readonly />
+          </label>
+          <label class="field">Microphone
+            <select id="microphone"><option value="">System default</option></select>
+          </label>
+          <label class="check"><input id="restore-clipboard" type="checkbox" /> Restore my clipboard after pasting</label>
+
+          <div class="card">
+            <h2>Updates</h2>
+            <p class="muted small">
+              TalyxelVoice <span id="app-version"></span>. Updates download in the background and are
+              signature-checked; you choose when to restart.
+            </p>
+            <div class="row" style="margin-top: 12px">
+              <button id="update-check" class="btn">Check now</button>
+              <button id="update-install" class="btn primary" hidden>Restart &amp; update</button>
+              <span id="update-status" class="status"></span>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+    <div id="toast" class="toast"></div>
+  </body>
+</html>
