@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 type Engine = "local" | "remote";
-type Polish = "off" | "clean" | "format";
+type Polish = "off" | "clean" | "medium" | "format";
 type FormatStyle = "text" | "note" | "list" | "timelog";
 
 interface Remote {
@@ -18,6 +18,7 @@ interface Settings {
   repaste_hotkey: string;
   polish: Polish;
   format_style: FormatStyle;
+  app_modes: AppMode[];
   text_model: { engine: Engine; local_model: string; remote: Remote };
   engine: Engine;
   local_model: string;
@@ -41,9 +42,16 @@ interface Snippet {
   text: string;
 }
 
+interface AppMode {
+  exe: string;
+  polish: Polish;
+  format_style: FormatStyle;
+}
+
 interface ModelInfo {
   name: string;
   size_mb: number;
+  note: string;
   downloaded: boolean;
 }
 
@@ -114,8 +122,54 @@ function renderBadge() {
 const POLISH_HINTS: Record<Polish, string> = {
   off: "Pastes exactly what whisper heard.",
   clean: "Removes filler words (uh, um, eh) and stutters like \"we should, we should\". Instant, no model needed.",
+  medium:
+    "Cleans up, then the text model fixes punctuation and keeps only your correction when you say \"Thursday, no wait, Friday\". Your words stay yours. Takes a few seconds; works best with the 3B model or a server.",
   format: "Cleans up, then the text model reshapes it in the style below. Takes a few seconds.",
 };
+
+const POLISH_LABELS: Record<Polish, string> = { off: "As spoken", clean: "Clean up", medium: "Medium", format: "Format" };
+const FORMAT_LABELS: Record<FormatStyle, string> = { text: "Text", note: "Note", list: "List", timelog: "Time log" };
+
+function select<T extends string>(labels: Record<T, string>, value: T, onchange: (v: T) => void) {
+  const el = document.createElement("select");
+  for (const [v, label] of Object.entries(labels) as [T, string][]) el.add(new Option(label, v));
+  el.value = value;
+  el.onchange = () => onchange(el.value as T);
+  return el;
+}
+
+function renderAppModes() {
+  const known = new Set(history.map((h) => h.app).filter(Boolean));
+  $("known-apps").replaceChildren(...[...known].sort().map((a) => new Option(a)));
+  $("app-modes").replaceChildren(
+    ...settings.app_modes.map((m, i) => {
+      const li = document.createElement("li");
+      const exe = document.createElement("input");
+      exe.placeholder = "OUTLOOK.EXE";
+      exe.setAttribute("list", "known-apps");
+      exe.value = m.exe;
+      exe.oninput = () => ((m.exe = exe.value.trim()), save());
+      const style = select(FORMAT_LABELS, m.format_style, (v) => ((m.format_style = v), save(true)));
+      style.hidden = m.polish !== "format";
+      const polish = select(POLISH_LABELS, m.polish, (v) => {
+        m.polish = v;
+        style.hidden = v !== "format";
+        save(true);
+      });
+      const remove = document.createElement("button");
+      remove.className = "btn ghost";
+      remove.textContent = "Remove";
+      remove.onclick = () => {
+        settings.app_modes.splice(i, 1);
+        renderAppModes();
+        save(true);
+      };
+      li.append(exe, polish, style, remove);
+      if (!m.exe) queueMicrotask(() => exe.focus());
+      return li;
+    }),
+  );
+}
 
 const FORMAT_STYLE_HINTS: Record<FormatStyle, string> = {
   text: "Paragraphs, with a list where you sum things up. Good for emails and messages.",
@@ -162,7 +216,14 @@ async function renderModelList(text: boolean) {
       const li = document.createElement("li");
       li.className = "model" + (m.name === current() ? " selected" : "");
       const info = document.createElement("div");
-      info.innerHTML = `<b>${m.name}</b><span class="muted small">${m.size_mb} MB</span>`;
+      const size = m.size_mb >= 1000 ? `${(m.size_mb / 1000).toFixed(1)} GB` : `${m.size_mb} MB`;
+      info.innerHTML = `<b>${m.name}<span class="muted small">${size}</span></b>`;
+      if (m.note) {
+        const note = document.createElement("span");
+        note.className = "note muted small";
+        note.textContent = m.note;
+        info.append(note);
+      }
       const action = document.createElement("button");
       action.className = "btn";
       const pct = downloading.get(m.name);
@@ -382,6 +443,11 @@ function bindInputs() {
   punctuation.checked = settings.spoken_punctuation;
   punctuation.onchange = () => ((settings.spoken_punctuation = punctuation.checked), save(true));
 
+  $("app-mode-add").onclick = () => {
+    settings.app_modes.push({ exe: "", polish: "format", format_style: "text" });
+    renderAppModes();
+  };
+
   renderSnippets();
   $("snippet-add").onclick = () => {
     settings.snippets.push({ trigger: "", text: "" });
@@ -573,9 +639,11 @@ async function init() {
 
   history = await invoke<HistoryEntry[]>("get_history");
   renderHistory();
+  renderAppModes();
   await listen<HistoryEntry>("history-added", (e) => {
     history.unshift(e.payload);
     renderHistory();
+    renderAppModes();
   });
   await listen<{ name: string; downloaded: number; total: number }>("model-progress", (e) => {
     const { name, downloaded, total } = e.payload;

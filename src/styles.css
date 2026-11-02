@@ -126,6 +126,12 @@ textarea { resize: vertical; font-family: "Cascadia Code", Consolas, monospace; 
 .empty { color: var(--muted); padding: 20px 0; }
 .empty[hidden] { display: none; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+.app-modes { list-style: none; padding: 0; margin: 10px 0 12px; display: flex; flex-direction: column; gap: 8px; }
+.app-modes li { display: grid; grid-template-columns: 1fr auto auto auto; gap: 8px; align-items: center; }
+.app-modes input, .app-modes select { padding: 6px 10px; }
+.model .note { display: block; font-weight: 400; }
+.model div { flex-direction: column; gap: 2px; }
+.model div b { display: inline-flex; gap: 10px; align-items: baseline; }
 .snippets { list-style: none; padding: 0; margin: 0 0 16px; display: flex; flex-direction: column; gap: 10px; }
 .snippets li { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; align-items: start; }
 .snippets li .field { margin: 0; }

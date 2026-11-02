@@ -88,6 +88,7 @@ pub fn on_hotkey(app: &AppHandle, pressed: bool, kind: Kind) {
             let settings = state.settings.lock().unwrap().clone();
             match Recording::start(&settings.microphone) {
                 Ok(rec) => {
+                    let (polish, _) = settings.mode_for(&focused.exe);
                     *dictation = Dictation::Recording {
                         rec,
                         started: Instant::now(),
@@ -96,7 +97,7 @@ pub fn on_hotkey(app: &AppHandle, pressed: bool, kind: Kind) {
                         app: focused,
                     };
                     // Load the text model while the user talks.
-                    let needs_model = summary || settings.polish == Polish::Format;
+                    let needs_model = summary || matches!(polish, Polish::Medium | Polish::Format);
                     if needs_model && settings.text_model.engine == Engine::Local {
                         let model = crate::settings::text_model_path(
                             &state.models_dir,
@@ -210,13 +211,14 @@ async fn run(
     let raw = transcript.text;
 
     let summary = kind == Kind::Summary;
+    let (polish, format_style) = settings.mode_for(&focused.exe);
     // Dictionary fixes and spoken punctuation are the user's own rules, so
     // they apply even to "as spoken".
     let mut text = polish::replace_words(&raw, &settings.replacements());
     if settings.spoken_punctuation {
         text = polish::spoken_punctuation(&text);
     }
-    if settings.polish != Polish::Off || summary {
+    if polish != Polish::Off || summary {
         text = polish::strip_fillers(&text, language);
     }
     let snippet = if summary { None } else { polish::apply_snippet(&text, &settings.snippets) };
@@ -226,12 +228,15 @@ async fn run(
             (None, "snippet".to_owned())
         }
         None if summary => (Some(Task::Summarize), "summary".to_owned()),
-        None if settings.polish == Polish::Format => {
-            let style = settings.format_style;
-            (Some(Task::Format(style)), format!("format · {}", format!("{style:?}").to_lowercase()))
-        }
-        None if settings.polish == Polish::Off => (None, "as spoken".to_owned()),
-        None => (None, "clean".to_owned()),
+        None => match polish {
+            Polish::Off => (None, "as spoken".to_owned()),
+            Polish::Clean => (None, "clean".to_owned()),
+            Polish::Medium => (Some(Task::Cleanup), "medium".to_owned()),
+            Polish::Format => (
+                Some(Task::Format(format_style)),
+                format!("format · {}", format!("{format_style:?}").to_lowercase()),
+            ),
+        },
     };
     let mut warning = None;
     if let Some(task) = task {
@@ -241,7 +246,11 @@ async fn run(
             Ok(polished) => text = polished,
             Err(e) => {
                 log::warn!("{task:?} failed: {e:#}");
-                let what = if task == Task::Summarize { "summarize" } else { "format" };
+                let what = match task {
+                    Task::Summarize => "summarize",
+                    Task::Cleanup => "clean up",
+                    Task::Format(_) => "format",
+                };
                 warning = Some(anyhow::anyhow!("Couldn't {what} ({e}); pasted the plain text"));
                 mode = "clean (model failed)".to_owned();
             }

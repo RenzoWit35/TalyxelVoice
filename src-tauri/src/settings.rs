@@ -38,8 +38,27 @@ pub enum Polish {
     Off,
     /// Drop filler words and stutters; rule-based, instant, no model.
     Clean,
+    /// Clean, then let the text model fix punctuation and drop what you
+    /// corrected yourself ("Friday, no wait, Monday"), keeping your words.
+    Medium,
     /// Clean, then let the text model add paragraphs and lists.
     Format,
+}
+
+/// Cleanup for one application, chosen by the focused window's executable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AppMode {
+    /// Executable name, e.g. `OUTLOOK.EXE`; matched without case or `.exe`.
+    pub exe: String,
+    pub polish: Polish,
+    pub format_style: FormatStyle,
+}
+
+impl Default for AppMode {
+    fn default() -> Self {
+        Self { exe: String::new(), polish: Polish::Clean, format_style: FormatStyle::Text }
+    }
 }
 
 /// The shape `Polish::Format` gives the text.
@@ -102,6 +121,8 @@ pub struct Settings {
     pub repaste_hotkey: String,
     pub polish: Polish,
     pub format_style: FormatStyle,
+    /// Overrides `polish`/`format_style` for particular applications.
+    pub app_modes: Vec<AppMode>,
     pub text_model: TextModelSettings,
     pub engine: Engine,
     /// ggml model name, stored as `models/ggml-<name>.bin`.
@@ -138,6 +159,7 @@ impl Default for Settings {
             repaste_hotkey: "Ctrl+Alt+V".into(),
             polish: Polish::Clean,
             format_style: FormatStyle::Text,
+            app_modes: Vec::new(),
             text_model: TextModelSettings::default(),
             engine: Engine::Local,
             local_model: "small-q5_1".into(),
@@ -222,6 +244,16 @@ impl Settings {
         (!from.is_empty() && !to.is_empty()).then(|| (from.to_owned(), to.to_owned()))
     }
 
+    /// The cleanup to use when dictating into `exe`.
+    pub fn mode_for(&self, exe: &str) -> (Polish, FormatStyle) {
+        let name = |s: &str| s.trim().trim_end_matches(".exe").trim_end_matches(".EXE").to_lowercase();
+        let wanted = name(exe);
+        self.app_modes
+            .iter()
+            .find(|m| !wanted.is_empty() && name(&m.exe) == wanted)
+            .map_or((self.polish, self.format_style), |m| (m.polish, m.format_style))
+    }
+
     pub fn language_code(&self) -> Option<&str> {
         match self.language.trim() {
             "" | "auto" => None,
@@ -256,5 +288,21 @@ mod tests {
             [("talixel".to_owned(), "Talyxel".to_owned()), ("a".to_owned(), "b".to_owned())]
         );
         assert_eq!(s.initial_prompt(), "Vocabulary: Talyxel, Tauri, Kubernetes.");
+    }
+
+    #[test]
+    fn per_app_modes() {
+        let s = Settings {
+            polish: Polish::Clean,
+            app_modes: vec![
+                AppMode { exe: "outlook".into(), polish: Polish::Format, format_style: FormatStyle::Text },
+                AppMode { exe: "Code.exe".into(), polish: Polish::Off, format_style: FormatStyle::Text },
+            ],
+            ..Default::default()
+        };
+        assert_eq!(s.mode_for("OUTLOOK.EXE").0, Polish::Format);
+        assert_eq!(s.mode_for("code.exe").0, Polish::Off);
+        assert_eq!(s.mode_for("Teams.exe").0, Polish::Clean);
+        assert_eq!(s.mode_for("").0, Polish::Clean);
     }
 }

@@ -85,6 +85,7 @@
           <div class="segmented" role="radiogroup">
             <label><input type="radio" name="polish" value="off" /> <span>As spoken</span></label>
             <label><input type="radio" name="polish" value="clean" /> <span>Clean up</span></label>
+            <label><input type="radio" name="polish" value="medium" /> <span>Medium</span></label>
             <label><input type="radio" name="polish" value="format" /> <span>Format</span></label>
           </div>
           <p class="muted small hint" id="polish-hint"></p>
@@ -101,6 +102,17 @@
           <label class="field">Summary hotkey <span class="muted small">hold it, talk, and a short summary is pasted</span>
             <input id="summary-hotkey" class="hotkey" readonly />
           </label>
+
+          <div class="card">
+            <h2>Per application</h2>
+            <p class="muted small">
+              Use a different cleanup in some apps: Format in Outlook, As spoken in a terminal. Matched on the
+              program's file name, which the history shows for every dictation.
+            </p>
+            <ul id="app-modes" class="app-modes"></ul>
+            <datalist id="known-apps"></datalist>
+            <button id="app-mode-add" class="btn">Add application</button>
+          </div>
 
           <div class="card">
             <h2>Text model</h2>

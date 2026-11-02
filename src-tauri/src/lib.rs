@@ -54,19 +54,36 @@ const MODELS: &[(&str, u32)] = &[
     ("large-v3-turbo-q5_0", 547),
 ];
 
-/// (name, approximate size in MB, GGUF URL) for formatting and summaries.
-/// Picked by testing on Dutch/English dictations: the smallest model that
-/// keeps the speaker's language instead of translating to English.
-const TEXT_MODELS: &[(&str, u32, &str)] = &[(
-    "qwen2.5-1.5b",
-    1066,
-    "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf",
-)];
+/// (name, approximate size in MB, what to expect, GGUF URL) for cleanup,
+/// formatting and summaries. The 1.5B was picked by testing on Dutch/English
+/// dictations as the smallest model that keeps the speaker's language instead
+/// of translating to English; the bigger ones follow instructions better.
+const TEXT_MODELS: &[(&str, u32, &str, &str)] = &[
+    (
+        "qwen2.5-1.5b",
+        1066,
+        "Needs ~2 GB RAM. A few seconds per dictation on a laptop CPU. Fine for formatting; shaky on self-corrections.",
+        "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+    ),
+    (
+        "qwen2.5-3b",
+        2105,
+        "Needs ~3.5 GB RAM, about twice as slow. Noticeably better at Medium cleanup and transforms.",
+        "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
+    ),
+    (
+        "qwen2.5-7b",
+        4683,
+        "Needs ~6.5 GB RAM; slow without a GPU, 10-30 s per dictation on a laptop. The best local quality.",
+        "https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+    ),
+];
 
 #[derive(Serialize)]
 struct ModelInfo {
     name: &'static str,
     size_mb: u32,
+    note: &'static str,
     downloaded: bool,
 }
 
@@ -129,6 +146,7 @@ fn list_models(state: State<AppState>) -> Vec<ModelInfo> {
         .map(|&(name, size_mb)| ModelInfo {
             name,
             size_mb,
+            note: "",
             downloaded: settings::model_path(&state.models_dir, name).exists(),
         })
         .collect()
@@ -138,9 +156,10 @@ fn list_models(state: State<AppState>) -> Vec<ModelInfo> {
 fn list_text_models(state: State<AppState>) -> Vec<ModelInfo> {
     TEXT_MODELS
         .iter()
-        .map(|&(name, size_mb, _)| ModelInfo {
+        .map(|&(name, size_mb, note, _)| ModelInfo {
             name,
             size_mb,
+            note,
             downloaded: settings::text_model_path(&state.models_dir, name).exists(),
         })
         .collect()
@@ -158,7 +177,7 @@ struct Progress {
 async fn download_model(app: AppHandle, name: String, text: Option<bool>) -> CmdResult<()> {
     let dir = app.state::<AppState>().models_dir.clone();
     let (url, final_path) = if text.unwrap_or(false) {
-        let (_, _, url) = TEXT_MODELS
+        let (_, _, _, url) = TEXT_MODELS
             .iter()
             .find(|(n, ..)| *n == name)
             .ok_or_else(|| format!("unknown model {name}"))?;

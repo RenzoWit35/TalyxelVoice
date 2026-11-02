@@ -265,6 +265,8 @@ pub fn apply_snippet(text: &str, snippets: &[Snippet]) -> Option<String> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Task {
+    /// Punctuation and self-corrections only; the words stay the speaker's.
+    Cleanup,
     Format(FormatStyle),
     Summarize,
 }
@@ -489,14 +491,24 @@ resulting text.";
 /// gets one Dutch and one English example (the languages this was tuned on).
 fn examples(task: Task) -> [(&'static str, &'static str); 2] {
     match task {
+        Task::Cleanup => [
+            (
+                "de afspraak is donderdag om twee uur nee wacht vrijdag om drie uur en kun je Pieter ook uitnodigen",
+                "De afspraak is vrijdag om drie uur. Kun je Pieter ook uitnodigen?",
+            ),
+            (
+                "I looked at the server and I think we should, no, we have to update the DNS settings first and then restart it",
+                "I looked at the server and we have to update the DNS settings first and then restart it.",
+            ),
+        ],
         Task::Format(FormatStyle::Text) => [
             (
                 "hoi Sanne even een update we hebben de offerte verstuurd en de klant reageert volgende week verder moeten we nog de planning maken en de facturen controleren groet Renzo",
                 "Hoi Sanne,\n\nEven een update: we hebben de offerte verstuurd en de klant reageert volgende week.\n\nVerder moeten we nog:\n- de planning maken\n- de facturen controleren\n\nGroet,\nRenzo",
             ),
             (
-                "so for the release we need three things the changelog the installer and a blog post",
-                "For the release we need three things:\n- the changelog\n- the installer\n- a blog post",
+                "so for the release we need three things one the changelog two the installer and three a blog post",
+                "For the release we need three things:\n1. The changelog\n2. The installer\n3. A blog post",
             ),
         ],
         Task::Format(FormatStyle::Note) => [
@@ -544,10 +556,17 @@ fn examples(task: Task) -> [(&'static str, &'static str); 2] {
 
 fn system_prompt(task: Task, language: Option<&str>) -> String {
     let job = match task {
+        Task::Cleanup => {
+            "Clean up dictated text from speech recognition: fix punctuation and capitalization, and \
+             when the speaker corrects themselves ('Thursday, no wait, Friday') keep only the \
+             correction. Keep every other word, in the speaker's order; never rephrase, shorten, \
+             add line breaks or lists."
+        }
         Task::Format(FormatStyle::Text) => {
             "Turn dictated text from speech recognition into neatly written text: fix punctuation \
-             and capitalization, add paragraph breaks, and turn enumerations into '- ' bullet lists. \
-             A single sentence stays a single sentence. Keep the speaker's words."
+             and capitalization, add paragraph breaks, and turn enumerations into lists: '- ' \
+             bullets, or '1.' numbers when the speaker counts them off. A single sentence stays a \
+             single sentence. Keep the speaker's words."
         }
         Task::Format(FormatStyle::Note) => {
             "Turn dictated text from speech recognition into a short, businesslike note: keep every \
@@ -601,6 +620,9 @@ fn tidy_output(raw: &str) -> String {
 fn plausible(task: Task, input: &str, output: &str) -> bool {
     let (inp, out) = (input.chars().count(), output.chars().count());
     match task {
+        // Self-corrections make it shorter, never much longer, and never a
+        // fraction of the input (that's a model answering, not cleaning).
+        Task::Cleanup => out > 0 && out <= inp + 60 && out * 3 >= inp,
         Task::Format(_) => out > 0 && out <= inp * 2 + 100,
         Task::Summarize => out > 0 && out <= inp + 60,
     }
@@ -721,6 +743,8 @@ mod tests {
     fn tidies_and_checks_output() {
         assert_eq!(tidy_output("<think>\n</think>\n\n\"Hallo.\""), "Hallo.");
         assert!(plausible(Task::Format(FormatStyle::Text), "a b c", "A, b, c."));
+        assert!(plausible(Task::Cleanup, "donderdag nee wacht vrijdag om drie", "Vrijdag om drie."));
+        assert!(!plausible(Task::Cleanup, &"veel tekst ".repeat(30), "Ja."));
         assert!(!plausible(Task::Summarize, "kort", &"lang ".repeat(40)));
         assert!(!plausible(Task::Format(FormatStyle::List), "iets", ""));
     }
@@ -751,6 +775,11 @@ mod tests {
             let meeting = "Eh ja, dus de meeting van morgen is verplaatst naar donderdag, want Pieter kan niet. \
                  We moeten nog de slides afmaken, de budget numbers checken en de klant mailen over de planning.";
             let cases = [
+                (
+                    Task::Cleanup,
+                    "De afspraak staat donderdag om twee uur, nee wacht, vrijdag om drie uur, en we moeten \
+                     nog, we moeten nog de slides afmaken.",
+                ),
                 (Task::Format(FormatStyle::Text), meeting),
                 (
                     Task::Format(FormatStyle::Note),
