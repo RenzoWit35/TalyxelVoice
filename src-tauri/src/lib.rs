@@ -16,6 +16,7 @@ use serde::Serialize;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, State, WebviewWindowBuilder, WindowEvent};
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 use history::{History, HistoryEntry};
@@ -92,7 +93,16 @@ fn save_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> 
     if previous.keep_history && !settings.keep_history {
         state.history.lock().unwrap().forget_file();
     }
+    if previous.autostart != settings.autostart {
+        apply_autostart(&app, settings.autostart)?;
+    }
     Ok(())
+}
+
+fn apply_autostart(app: &AppHandle, on: bool) -> CmdResult<()> {
+    let launcher = app.autolaunch();
+    let result = if on { launcher.enable() } else { launcher.disable() };
+    result.map_err(|e| format!("couldn't change start-with-Windows: {e}"))
 }
 
 /// Preloads the local model off-thread so the first dictation is fast.
@@ -316,6 +326,7 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--hidden"])))
         .manage(updates::Updates::default())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -352,8 +363,18 @@ pub fn run() {
             });
             // Created here rather than from the config, so its first invoke
             // can't run before AppState is managed (the bundled page loads fast).
+            // Started with Windows (`--hidden`), it stays in the tray.
+            let hidden = std::env::args().any(|a| a == "--hidden");
             if let Some(main) = app.config().app.windows.iter().find(|w| w.label == "main") {
-                WebviewWindowBuilder::from_config(app, main)?.build()?;
+                let mut main = main.clone();
+                main.visible = !hidden;
+                WebviewWindowBuilder::from_config(app, &main)?.build()?;
+            }
+            // Re-register on every start so the entry survives reinstalls.
+            if app.state::<AppState>().settings.lock().unwrap().autostart {
+                if let Err(e) = apply_autostart(app.handle(), true) {
+                    log::warn!("{e}");
+                }
             }
 
             warm_up(app.handle());

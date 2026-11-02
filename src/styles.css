@@ -126,6 +126,10 @@ textarea { resize: vertical; font-family: "Cascadia Code", Consolas, monospace; 
 .empty { color: var(--muted); padding: 20px 0; }
 .empty[hidden] { display: none; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+.snippets { list-style: none; padding: 0; margin: 0 0 16px; display: flex; flex-direction: column; gap: 10px; }
+.snippets li { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; align-items: start; }
+.snippets li .field { margin: 0; }
+.snippets li textarea { grid-column: 1 / -1; font-family: inherit; min-height: 64px; }
 @media (max-width: 700px) { .grid2 { grid-template-columns: 1fr; } }
 
 .toast { position: fixed; bottom: 20px; left: 50%; transform: translate(-50%, 12px); opacity: 0; pointer-events: none;

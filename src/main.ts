@@ -25,13 +25,21 @@ interface Settings {
   language: string;
   spoken_languages: string[];
   dictionary: string[];
+  spoken_punctuation: boolean;
+  snippets: Snippet[];
   microphone: string;
   restore_clipboard: boolean;
+  autostart: boolean;
   keep_history: boolean;
   history_days: number;
 }
 
 type HotkeyField = "hotkey" | "summary_hotkey" | "undo_hotkey" | "repaste_hotkey";
+
+interface Snippet {
+  trigger: string;
+  text: string;
+}
 
 interface ModelInfo {
   name: string;
@@ -266,6 +274,38 @@ function historyItem(h: HistoryEntry) {
 
 let history: HistoryEntry[] = [];
 
+function renderSnippets() {
+  const list = $("snippets");
+  list.replaceChildren(
+    ...settings.snippets.map((s, i) => {
+      const li = document.createElement("li");
+      const trigger = document.createElement("label");
+      trigger.className = "field";
+      trigger.textContent = "When I say";
+      const triggerInput = document.createElement("input");
+      triggerInput.placeholder = "my signature";
+      triggerInput.value = s.trigger;
+      triggerInput.oninput = () => ((s.trigger = triggerInput.value), save());
+      trigger.append(triggerInput);
+      const remove = document.createElement("button");
+      remove.className = "btn ghost";
+      remove.textContent = "Remove";
+      remove.onclick = () => {
+        settings.snippets.splice(i, 1);
+        renderSnippets();
+        save(true);
+      };
+      const text = document.createElement("textarea");
+      text.placeholder = "Kind regards,\nRenzo";
+      text.value = s.text;
+      text.oninput = () => ((s.text = text.value), save());
+      li.append(trigger, remove, text);
+      if (!s.trigger) queueMicrotask(() => triggerInput.focus());
+      return li;
+    }),
+  );
+}
+
 function renderHistory() {
   const q = $<HTMLInputElement>("history-search").value.trim().toLowerCase();
   const items = q
@@ -338,9 +378,23 @@ function bindInputs() {
   dictionary.value = settings.dictionary.join("\n");
   dictionary.oninput = () => ((settings.dictionary = splitList(dictionary.value, /\n/)), save());
 
+  const punctuation = $<HTMLInputElement>("spoken-punctuation");
+  punctuation.checked = settings.spoken_punctuation;
+  punctuation.onchange = () => ((settings.spoken_punctuation = punctuation.checked), save(true));
+
+  renderSnippets();
+  $("snippet-add").onclick = () => {
+    settings.snippets.push({ trigger: "", text: "" });
+    renderSnippets();
+  };
+
   const restore = $<HTMLInputElement>("restore-clipboard");
   restore.checked = settings.restore_clipboard;
   restore.onchange = () => ((settings.restore_clipboard = restore.checked), save(true));
+
+  const autostart = $<HTMLInputElement>("autostart");
+  autostart.checked = settings.autostart;
+  autostart.onchange = () => ((settings.autostart = autostart.checked), save(true));
 
   const keep = $<HTMLInputElement>("keep-history");
   keep.checked = settings.keep_history;

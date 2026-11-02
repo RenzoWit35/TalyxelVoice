@@ -210,22 +210,28 @@ async fn run(
     let raw = transcript.text;
 
     let summary = kind == Kind::Summary;
-    let mut text = match settings.polish {
-        Polish::Off if !summary => raw.clone(),
-        _ => polish::strip_fillers(&raw, language),
-    };
-    let task = if summary {
-        Some(Task::Summarize)
-    } else if settings.polish == Polish::Format {
-        Some(Task::Format(settings.format_style))
-    } else {
-        None
-    };
-    let mut mode = match (task, settings.polish) {
-        (Some(Task::Summarize), _) => "summary".to_owned(),
-        (Some(Task::Format(style)), _) => format!("format · {}", format!("{style:?}").to_lowercase()),
-        (None, Polish::Off) => "as spoken".to_owned(),
-        (None, _) => "clean".to_owned(),
+    // Dictionary fixes and spoken punctuation are the user's own rules, so
+    // they apply even to "as spoken".
+    let mut text = polish::replace_words(&raw, &settings.replacements());
+    if settings.spoken_punctuation {
+        text = polish::spoken_punctuation(&text);
+    }
+    if settings.polish != Polish::Off || summary {
+        text = polish::strip_fillers(&text, language);
+    }
+    let snippet = if summary { None } else { polish::apply_snippet(&text, &settings.snippets) };
+    let (task, mut mode) = match snippet {
+        Some(expanded) => {
+            text = expanded;
+            (None, "snippet".to_owned())
+        }
+        None if summary => (Some(Task::Summarize), "summary".to_owned()),
+        None if settings.polish == Polish::Format => {
+            let style = settings.format_style;
+            (Some(Task::Format(style)), format!("format · {}", format!("{style:?}").to_lowercase()))
+        }
+        None if settings.polish == Polish::Off => (None, "as spoken".to_owned()),
+        None => (None, "clean".to_owned()),
     };
     let mut warning = None;
     if let Some(task) = task {

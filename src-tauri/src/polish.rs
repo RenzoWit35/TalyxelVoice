@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context};
 use serde::{Deserialize, Serialize};
 
-use crate::settings::{Engine, FormatStyle, RemoteSettings, TextModelSettings};
+use crate::settings::{Engine, FormatStyle, RemoteSettings, Snippet, TextModelSettings};
 
 // --- rule-based cleanup ---------------------------------------------------
 
@@ -92,6 +92,173 @@ pub fn strip_fillers(text: &str, language: Option<&str>) -> String {
         }
     }
     words.join(" ")
+}
+
+/// Applies the dictionary's `heard => wanted` fixes: case-insensitive, on
+/// whole words only, so "VLAN" doesn't fire inside "vlanen".
+pub fn replace_words(text: &str, pairs: &[(String, String)]) -> String {
+    let mut out: Vec<char> = text.chars().collect();
+    for (from, to) in pairs {
+        let from: Vec<char> = from.chars().collect();
+        if from.is_empty() {
+            continue;
+        }
+        let boundary = |c: Option<&char>| c.is_none_or(|c| !c.is_alphanumeric());
+        let mut i = 0;
+        while i + from.len() <= out.len() {
+            let matches = out[i..i + from.len()]
+                .iter()
+                .zip(&from)
+                .all(|(a, b)| a.to_lowercase().eq(b.to_lowercase()))
+                && boundary(if i == 0 { None } else { out.get(i - 1) })
+                && boundary(out.get(i + from.len()));
+            if matches {
+                let replacement: Vec<char> = to.chars().collect();
+                let n = replacement.len();
+                out.splice(i..i + from.len(), replacement);
+                i += n;
+            } else {
+                i += 1;
+            }
+        }
+    }
+    out.into_iter().collect()
+}
+
+/// Spoken punctuation, matched in any supported language regardless of the
+/// one being dictated, since people mix them. Longest phrase first.
+const SPOKEN: &[(&str, &str)] = &[
+    ("new paragraph", "\n\n"),
+    ("nieuwe alinea", "\n\n"),
+    ("nieuwe paragraaf", "\n\n"),
+    ("neuer absatz", "\n\n"),
+    ("nouveau paragraphe", "\n\n"),
+    ("new line", "\n"),
+    ("newline", "\n"),
+    ("nieuwe regel", "\n"),
+    ("neue zeile", "\n"),
+    ("nouvelle ligne", "\n"),
+    ("question mark", "?"),
+    ("vraagteken", "?"),
+    ("fragezeichen", "?"),
+    ("exclamation mark", "!"),
+    ("exclamation point", "!"),
+    ("uitroepteken", "!"),
+    ("ausrufezeichen", "!"),
+    ("full stop", "."),
+    ("period", "."),
+    ("punt", "."),
+    ("punkt", "."),
+    ("dubbele punt", ":"),
+    ("doppelpunkt", ":"),
+    ("colon", ":"),
+    ("semicolon", ";"),
+    ("puntkomma", ";"),
+    ("semikolon", ";"),
+    ("comma", ","),
+    ("komma", ","),
+    ("virgule", ","),
+];
+
+/// Turns "we moeten nog bellen komma mailen punt nieuwe regel groet" into
+/// "we moeten nog bellen, mailen.\ngroet": the named punctuation attaches to
+/// the previous word, and the sentence after a full stop starts capitalized.
+pub fn spoken_punctuation(text: &str) -> String {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let phrases: Vec<(Vec<&str>, &str)> =
+        SPOKEN.iter().map(|(p, s)| (p.split(' ').collect(), *s)).collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut capitalize_next = false;
+    let mut i = 0;
+    while i < words.len() {
+        let hit = phrases.iter().find(|(phrase, _)| {
+            i + phrase.len() <= words.len()
+                && phrase.iter().zip(&words[i..]).all(|(p, w)| core(w) == *p)
+        });
+        let Some((phrase, symbol)) = hit else {
+            let mut w = words[i].to_owned();
+            if capitalize_next {
+                w = capitalize(&w);
+                capitalize_next = false;
+            }
+            out.push(w);
+            i += 1;
+            continue;
+        };
+        i += phrase.len();
+        if symbol.starts_with('\n') {
+            if let Some(prev) = out.last_mut() {
+                if !prev.starts_with('\n') {
+                    *prev = prev.trim_end_matches([',', ';', ':']).to_owned();
+                }
+            }
+            if !out.is_empty() {
+                out.push((*symbol).to_owned());
+            }
+            capitalize_next = true;
+        } else if let Some(prev) = out.last_mut() {
+            if prev.starts_with('\n') {
+                continue;
+            }
+            let base = prev.trim_end_matches(|c: char| c.is_ascii_punctuation() && c != ')');
+            *prev = format!("{base}{symbol}");
+            capitalize_next = matches!(*symbol, "." | "?" | "!");
+        }
+    }
+    let mut s = String::new();
+    for token in out {
+        if token.starts_with('\n') {
+            s.push_str(&token);
+        } else {
+            if !s.is_empty() && !s.ends_with('\n') {
+                s.push(' ');
+            }
+            s.push_str(&token);
+        }
+    }
+    s
+}
+
+fn normalize(text: &str) -> String {
+    text.split_whitespace().map(core).filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ")
+}
+
+/// A snippet trigger said on its own expands to its text; said at the end of
+/// a sentence ("thanks for the update, my signature"), the text follows what
+/// came before.
+pub fn apply_snippet(text: &str, snippets: &[Snippet]) -> Option<String> {
+    let said = normalize(text);
+    if said.is_empty() {
+        return None;
+    }
+    for snippet in snippets {
+        let trigger = normalize(&snippet.trigger);
+        if trigger.is_empty() {
+            continue;
+        }
+        if said == trigger {
+            return Some(snippet.text.clone());
+        }
+        let Some(prefix) = said.strip_suffix(&trigger) else { continue };
+        if !prefix.ends_with(' ') {
+            continue;
+        }
+        // Drop the trigger's words from the end of the original text.
+        let words: Vec<&str> = text.split_whitespace().collect();
+        let mut remaining = trigger.split(' ').count();
+        let mut keep = words.len();
+        while remaining > 0 && keep > 0 {
+            keep -= 1;
+            if !core(words[keep]).is_empty() {
+                remaining -= 1;
+            }
+        }
+        let before = words[..keep].join(" ");
+        let before = before.trim_end_matches([',', ';', ':', ' ']);
+        let glue = if snippet.text.contains('\n') { "\n\n" } else { " " };
+        return Some(format!("{before}{glue}{}", snippet.text));
+    }
+    None
 }
 
 // --- the text model --------------------------------------------------------
@@ -499,6 +666,48 @@ mod tests {
         assert_eq!(strip_fillers("Ik denk dat dat klopt.", Some("nl")), "Ik denk dat dat klopt.");
         assert_eq!(strip_fillers("Es geht um Geld.", Some("de")), "Es geht um Geld.");
         assert_eq!(strip_fillers("Klaar. Klaar.", None), "Klaar. Klaar.");
+    }
+
+    #[test]
+    fn replaces_whole_words_case_insensitively() {
+        let pairs = vec![("talixel".to_owned(), "Talyxel".to_owned()), ("v lan".to_owned(), "VLAN".to_owned())];
+        assert_eq!(
+            replace_words("Talixel voice, talixel. Een V lan en vlanen.", &pairs),
+            "Talyxel voice, Talyxel. Een VLAN en vlanen."
+        );
+    }
+
+    #[test]
+    fn spoken_punctuation_attaches_to_previous_word() {
+        assert_eq!(
+            spoken_punctuation("we moeten nog bellen komma mailen punt nieuwe regel groet Renzo"),
+            "we moeten nog bellen, mailen.\nGroet Renzo"
+        );
+        assert_eq!(
+            spoken_punctuation("Is dat zo vraagteken. ja new paragraph tot morgen"),
+            "Is dat zo? Ja\n\nTot morgen"
+        );
+        assert_eq!(spoken_punctuation("Komma komma"), "");
+        assert_eq!(spoken_punctuation("Hallo, komma, Jan"), "Hallo, Jan");
+    }
+
+    #[test]
+    fn snippets_expand() {
+        let snippets = vec![
+            Snippet { trigger: "my signature".into(), text: "Kind regards,\nRenzo".into() },
+            Snippet { trigger: "Ticket opgelost".into(), text: "Het ticket is opgelost.".into() },
+        ];
+        assert_eq!(apply_snippet("My signature.", &snippets).as_deref(), Some("Kind regards,\nRenzo"));
+        assert_eq!(
+            apply_snippet("Thanks for the update, my signature", &snippets).as_deref(),
+            Some("Thanks for the update\n\nKind regards,\nRenzo")
+        );
+        assert_eq!(
+            apply_snippet("Hoi Jan, ticket opgelost.", &snippets).as_deref(),
+            Some("Hoi Jan Het ticket is opgelost.")
+        );
+        assert_eq!(apply_snippet("my signature is unreadable", &snippets), None);
+        assert_eq!(apply_snippet("signature", &snippets), None);
     }
 
     #[test]

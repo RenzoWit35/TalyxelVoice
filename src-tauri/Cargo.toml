@@ -34,6 +34,7 @@ windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_Window
 reqwest = { version = "0.13", default-features = false, features = ["multipart", "json", "rustls", "stream"] }
 tauri-plugin-log = "2.10.1"
 tauri-plugin-updater = "2.14.1"
+tauri-plugin-autostart = "2"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

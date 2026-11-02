@@ -81,6 +81,14 @@ impl Default for TextModelSettings {
     }
 }
 
+/// A phrase you say, and the text that goes in instead.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Snippet {
+    pub trigger: String,
+    pub text: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -103,11 +111,18 @@ pub struct Settings {
     pub language: String,
     /// Languages you mix while speaking; steers whisper toward code-switching.
     pub spoken_languages: Vec<String>,
-    /// Names and jargon whisper should spell correctly.
+    /// Names and jargon whisper should spell correctly, one per line. A
+    /// leading `*` puts a word first in whisper's prompt; `heard => wanted`
+    /// replaces what whisper keeps writing with what you mean.
     pub dictionary: Vec<String>,
+    /// "comma", "new line", "vraagteken", ... become the punctuation they name.
+    pub spoken_punctuation: bool,
+    pub snippets: Vec<Snippet>,
     /// Input device name; empty means the system default.
     pub microphone: String,
     pub restore_clipboard: bool,
+    /// Start with Windows, in the tray.
+    pub autostart: bool,
     /// Keep dictations in `history.json` across restarts (text only, never audio).
     pub keep_history: bool,
     /// Drop saved dictations older than this at startup; 0 keeps them forever.
@@ -130,8 +145,11 @@ impl Default for Settings {
             language: "auto".into(),
             spoken_languages: Vec::new(),
             dictionary: Vec::new(),
+            spoken_punctuation: false,
+            snippets: Vec::new(),
             microphone: String::new(),
             restore_clipboard: true,
+            autostart: false,
             keep_history: true,
             history_days: 14,
         }
@@ -165,10 +183,43 @@ impl Settings {
                 self.spoken_languages.join(" and ")
             ));
         }
-        if !self.dictionary.is_empty() {
-            parts.push(format!("Vocabulary: {}.", self.dictionary.join(", ")));
+        let words = self.vocabulary();
+        if !words.is_empty() {
+            parts.push(format!("Vocabulary: {}.", words.join(", ")));
         }
         parts.join(" ")
+    }
+
+    /// Dictionary words for whisper's prompt, starred ones first. The prompt
+    /// is cut off after a few hundred tokens, so order matters.
+    pub fn vocabulary(&self) -> Vec<String> {
+        let mut starred = Vec::new();
+        let mut rest = Vec::new();
+        for line in &self.dictionary {
+            let line = line.trim();
+            if line.is_empty() || Self::replacement(line).is_some() {
+                continue;
+            }
+            match line.strip_prefix('*') {
+                Some(word) if !word.trim().is_empty() => starred.push(word.trim().to_owned()),
+                Some(_) => {}
+                None => rest.push(line.to_owned()),
+            }
+        }
+        starred.append(&mut rest);
+        starred
+    }
+
+    /// `heard => wanted` lines: fixes applied to the transcript for names
+    /// whisper keeps misspelling even with the hint.
+    pub fn replacements(&self) -> Vec<(String, String)> {
+        self.dictionary.iter().filter_map(|l| Self::replacement(l.trim())).collect()
+    }
+
+    fn replacement(line: &str) -> Option<(String, String)> {
+        let (from, to) = line.split_once("=>").or_else(|| line.split_once("->"))?;
+        let (from, to) = (from.trim(), to.trim());
+        (!from.is_empty() && !to.is_empty()).then(|| (from.to_owned(), to.to_owned()))
     }
 
     pub fn language_code(&self) -> Option<&str> {
@@ -185,4 +236,25 @@ pub fn model_path(models_dir: &Path, name: &str) -> PathBuf {
 
 pub fn text_model_path(models_dir: &Path, name: &str) -> PathBuf {
     models_dir.join(format!("llm-{name}.gguf"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dictionary_lines() {
+        let s = Settings {
+            dictionary: ["Tauri", "*Talyxel", "talixel => Talyxel", " ", "*", "a -> b", "Kubernetes"]
+                .map(String::from)
+                .to_vec(),
+            ..Default::default()
+        };
+        assert_eq!(s.vocabulary(), ["Talyxel", "Tauri", "Kubernetes"]);
+        assert_eq!(
+            s.replacements(),
+            [("talixel".to_owned(), "Talyxel".to_owned()), ("a".to_owned(), "b".to_owned())]
+        );
+        assert_eq!(s.initial_prompt(), "Vocabulary: Talyxel, Tauri, Kubernetes.");
+    }
 }

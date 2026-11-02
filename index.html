@@ -15,6 +15,7 @@
         <button class="nav" data-tab="engine">Engine</button>
         <button class="nav" data-tab="cleanup">Cleanup &amp; summary</button>
         <button class="nav" data-tab="language">Language &amp; words</button>
+        <button class="nav" data-tab="snippets">Snippets</button>
         <button class="nav" data-tab="general">General</button>
         <div class="sidebar-foot" id="engine-badge"></div>
       </nav>
@@ -158,8 +159,30 @@
             <input id="spoken-languages" placeholder="Dutch, English" />
           </label>
           <label class="field">Personal dictionary <span class="muted small">one per line: names, products, jargon</span>
-            <textarea id="dictionary" rows="8" placeholder="Talyxel&#10;Tauri&#10;Kubernetes"></textarea>
+            <textarea id="dictionary" rows="8" placeholder="Talyxel&#10;*Entra ID&#10;share point => SharePoint"></textarea>
+            <span class="muted small">
+              Start a line with <code>*</code> to put that word first in whisper's hint (it only reads the first few hundred).
+              <code>heard => wanted</code> replaces what whisper keeps writing with what you mean, whole words, any case.
+            </span>
           </label>
+          <label class="check"><input id="spoken-punctuation" type="checkbox" /> Spoken punctuation</label>
+          <p class="muted small hint">
+            Say "comma", "period", "question mark", "new line" or "new paragraph" (also in Dutch, German and French:
+            "komma", "punt", "vraagteken", "nieuwe regel", "nieuwe alinea") and the punctuation goes in instead of the word.
+            Off by default because "punt" and "period" are also ordinary words.
+          </p>
+        </section>
+
+        <section class="tab" id="tab-snippets">
+          <header>
+            <h1>Snippets</h1>
+            <p class="muted">
+              Say a short phrase, get a longer text. Say it on its own ("my signature") or at the end of a sentence
+              ("thanks for the update, my signature"). A snippet skips the cleanup and formatting steps.
+            </p>
+          </header>
+          <ul id="snippets" class="snippets"></ul>
+          <button id="snippet-add" class="btn">Add snippet</button>
         </section>
 
         <section class="tab" id="tab-general">
@@ -180,6 +203,7 @@
             <select id="microphone"><option value="">System default</option></select>
           </label>
           <label class="check"><input id="restore-clipboard" type="checkbox" /> Restore my clipboard after pasting</label>
+          <label class="check"><input id="autostart" type="checkbox" /> Start with Windows, in the tray</label>
 
           <div class="card">
             <h2>History</h2>
