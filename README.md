@@ -24,7 +24,8 @@ Hold the hotkey, talk, let go: the text is pasted wherever your cursor is.
 | Cleanup & summary | `src-tauri/src/polish.rs` | Rule-based filler/stutter removal, then optional formatting or a summary by a small text model (bundled `llama-server`, or your own chat endpoint). |
 | Engines | `src-tauri/src/stt.rs` | `LocalWhisper` keeps the model + decoder state warm; the remote engine speaks the OpenAI transcription API. |
 | OS glue | `src-tauri/src/platform.rs` | Focused-app detection, paste via `SendInput`, overlay that never steals focus. |
-| Settings UI | `index.html`, `src/main.ts` | Engine, models, server, language and dictionary, hotkey, microphone. |
+| History | `src-tauri/src/history.rs` | Raw and pasted text per dictation, in `history.json`, pruned by age. |
+| Settings UI | `index.html`, `src/main.ts` | Engine, models, server, language and dictionary, snippets, per-app modes, hotkeys, microphone. |
 | Overlay pill | `pill.html`, `src/pill.ts` | Live level meter / "Transcribing" / errors, bottom-center above the taskbar. |
 
 Settings: `%APPDATA%\com.talyxel.voice\settings.json` · Models: `%APPDATA%\com.talyxel.voice\models\`
@@ -55,18 +56,69 @@ After whisper, each dictation goes through the mode picked under **Cleanup & sum
 - **As spoken**: pasted as heard.
 - **Clean up** (default): filler words (uh, um, eh) and stutters ("we should, we should") are
   removed by rules. Instant, no model.
+- **Medium**: clean up, then a text model fixes punctuation and self-corrections only.
 - **Format**: clean up, then a text model adds paragraphs and bullet lists.
 
 The **summary hotkey** (default `Alt+Shift+Space`) works like the dictation hotkey but pastes a
 few bullets summarizing what you said.
 
-The text model is `qwen2.5-1.5b` (1 GB), picked because smaller models translated Dutch to English.
+The default text model is `qwen2.5-1.5b` (1 GB), picked because smaller models translated Dutch to
+English; `qwen2.5-3b` and `qwen2.5-7b` can be downloaded in the same place and do noticeably better
+at Medium cleanup, transforms and commands, at the cost of RAM and seconds.
 It runs in a separate `llama-server` process: started when you press a hotkey that needs it (so it
 loads while you talk), stopped after 5 minutes idle, and tied to the app with a Windows job object so
 it can't outlive a crash. It uses a third of the cores, and adds a few seconds per dictation on a
 laptop CPU. For better and faster results, point it at a bigger model on your server
 (`/v1/chat/completions`: llama-server, Ollama, LM Studio, vLLM). If the model fails or answers with
 something that isn't a rewrite, the plain text is pasted and the pill says so.
+
+## Hotkeys
+
+| Default | Does |
+|---|---|
+| `Ctrl+Shift+Space` | Hold to dictate, tap for hands-free. Pastes where the cursor is. |
+| `Alt+Shift+Space` | Same, but pastes a few summary bullets. |
+| `Ctrl+Alt+P` | Rewrites the **selected** text with the chosen transform: polish, list, translate to English, shorter. |
+| `Ctrl+Alt+Space` | Hold, say what to do with the selected text ("make this more formal"), release. |
+| `Ctrl+Alt+Z` | Undo the cleanup: pastes the last dictation (or the text a transform replaced) as it was. |
+| `Ctrl+Alt+V` | Pastes the last dictation again. |
+
+All of them are configurable under General and Cleanup & summary; Backspace in a hotkey field turns
+it off. Transforms and commands copy the selection with a simulated `Ctrl+C`, so they work in any
+app that supports it, up to 3000 words. With the bundled 1.5B model, Polish and List work; commands
+tend to come back in English and Medium misses some self-corrections, so for those pick the 3B
+model or your own server.
+
+## Cleanup levels
+
+| Level | What happens | Model |
+|---|---|---|
+| As spoken | Pasted as heard. | none |
+| Clean up (default) | Fillers (uh, um, eh) and stutters ("we should, we should") removed by rules. | none |
+| Medium | Clean up, then punctuation fixed and self-corrections resolved ("Thursday, no wait, Friday" keeps Friday). Words stay yours. | text model |
+| Format | Clean up, then reshaped as text, note, list or time log. | text model |
+
+**Per application**: a table under Cleanup & summary maps a program's file name (`OUTLOOK.EXE`,
+`Code.exe`, as shown in the history) to its own level, so mail gets Format and a terminal gets As
+spoken. This is the local-first stand-in for "context awareness": it reads which window is focused,
+never what's in it.
+
+## Words, punctuation and snippets
+
+- **Dictionary** (Language & words): one word per line goes into whisper's prompt. `*Entra ID` puts
+  it first (the prompt is cut after a few hundred tokens). `share point => SharePoint` replaces what
+  whisper keeps writing, whole words, any case, before any cleanup.
+- **Spoken punctuation** (off by default): "comma", "period", "question mark", "new line",
+  "new paragraph" and their Dutch, German and French names become the punctuation they name.
+- **Snippets**: say a trigger phrase on its own ("my signature") or at the end of a sentence
+  ("thanks for the update, my signature") and its text goes in instead, skipping cleanup and
+  formatting.
+
+## History
+
+The Dictation tab lists what you said and what went in, with a word diff behind **Changes**. It is
+kept in `history.json` next to the settings (text only, never audio), pruned after 14 days by
+default; both are under General, next to a Clear button and **Start with Windows**.
 
 ## Using your own server
 
@@ -97,7 +149,9 @@ Auto-detect runs the encoder twice; set your language when you can. `base` is ~3
 lower accuracy. The encoder is sized to the clip (`audio_ctx`) rather than whisper's fixed 30 s window.
 
 Tests: `cargo test` (unit), plus opt-in end-to-end ones:
-`TALYXEL_TEST_MODEL=… TALYXEL_TEST_WAV=… cargo test --release -- --ignored`.
+`TALYXEL_TEST_MODEL=… TALYXEL_TEST_WAV=… cargo test --release -- --ignored` for whisper, and
+`TALYXEL_TEST_LLM=…\llm-qwen2.5-1.5b.gguf cargo test --release polish_end_to_end -- --ignored --nocapture`
+for every text-model task (cleanup, formats, summary, transforms, a command).
 
 ## Updates and releases
 
@@ -133,23 +187,12 @@ To test the whole flow without GitHub, a debug build honours `TALYXEL_UPDATE_URL
 `tauri dev --config '{"plugins":{"updater":{"dangerousInsecureTransportProtocol":true}}}'` for an
 http feed).
 
-## Roadmap: the Talyxel twist
+## Roadmap
 
-- [x] **M1 — Core dictation.** Push-to-talk and hands-free, local whisper or own server, paste
-      anywhere, clipboard restore, history, personal dictionary, language and code-switching hints.
-- [x] **Cleanup & summary.** Filler removal, formatting and a summary hotkey (see above).
-- [ ] **M2 — Per-app voice modes.** The focused app is already captured at key-down
-      (`FocusedApp.exe`). Map app → mode (Outlook: email tone; VS Code/terminals: code-aware
-      casing, no trailing period; Slack: casual; Notion/Obsidian: Markdown), then run an optional
-      cleanup pass through a local LLM (LM Studio / Ollama, OpenAI-compatible) or your server.
-- [ ] **M3 — Command mode.** A second hotkey: speak an instruction ("make this more formal",
-      "translate to Dutch", "turn into bullet points") and it is applied to the selected text
-      (copy selection → LLM → paste back).
-- [ ] **M4 — Better code-switching.** Per-segment language detection with large-v3 on the server,
-      learned dictionary (corrections you make get added), filler-word removal and spoken
-      punctuation ("new paragraph", "comma").
-- [ ] **Later:** Vulkan GPU build for Intel Arc / AMD iGPUs, a modifier-only hotkey (e.g. hold
-      Right-Ctrl) via a low-level keyboard hook, streaming partial results, macOS.
+See [ROADMAP.md](ROADMAP.md). Shipped so far: core dictation, cleanup levels and summaries, undo
+and history, snippets and spoken punctuation, per-app modes, transforms and commands on selected
+text. Still open: a modifier-only hotkey (hold Right-Ctrl) via a low-level keyboard hook, a Vulkan
+GPU build for Intel Arc / AMD iGPUs, streaming partial results, macOS.
 
 ## Third-party
 

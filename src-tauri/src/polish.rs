@@ -506,9 +506,9 @@ the translation.";
 
 /// Small models follow examples far better than instructions, so each task
 /// gets one Dutch and one English example (the languages this was tuned on).
-fn examples(task: &Task) -> [(&'static str, &'static str); 2] {
+fn examples(task: &Task) -> &'static [(&'static str, &'static str)] {
     match task {
-        Task::Transform(Transform::Polish) => [
+        Task::Transform(Transform::Polish) => &[
             (
                 "hoi jan ik heb gekeken naar de server en volgens mij moeten we eerst de dns instellingen aanpassen, daarna kan ie opnieuw opgestart worden. laat maar weten",
                 "Hoi Jan,\n\nIk heb naar de server gekeken. Volgens mij moeten we eerst de DNS-instellingen aanpassen, daarna kan hij opnieuw opgestart worden. Laat maar weten.",
@@ -518,7 +518,7 @@ fn examples(task: &Task) -> [(&'static str, &'static str); 2] {
                 "The new laptops have arrived, but we haven't received the docking stations yet. I will chase the supplier tomorrow.",
             ),
         ],
-        Task::Transform(Transform::List) => [
+        Task::Transform(Transform::List) => &[
             (
                 "Voor de migratie moeten we de shares kopiëren, de loginscripts aanpassen en daarna de back-ups testen.",
                 "- De shares kopiëren\n- De loginscripts aanpassen\n- De back-ups testen",
@@ -528,7 +528,7 @@ fn examples(task: &Task) -> [(&'static str, &'static str); 2] {
                 "- Check the projector\n- Make sure the wifi password works\n- Update the slides",
             ),
         ],
-        Task::Transform(Transform::Translate) => [
+        Task::Transform(Transform::Translate) => &[
             (
                 "Hoi Jan,\n\nDe offerte is verstuurd. De klant reageert volgende week.\n\nGroet,\nRenzo",
                 "Hi Jan,\n\nThe quote has been sent. The customer will respond next week.\n\nRegards,\nRenzo",
@@ -538,7 +538,7 @@ fn examples(task: &Task) -> [(&'static str, &'static str); 2] {
                 "We replaced the switches and updated the controller.",
             ),
         ],
-        Task::Transform(Transform::Shorter) => [
+        Task::Transform(Transform::Shorter) => &[
             (
                 "Ik wilde even laten weten dat ik vanochtend bij De Vries ben geweest voor de printer die niet wilde afdrukken. Ik heb de driver opnieuw geïnstalleerd en de wachtrij geleegd, en daarna werkte het allemaal weer prima. Het enige wat nog moet gebeuren is dat er nieuwe toner besteld wordt.",
                 "Vanochtend bij De Vries de printer gerepareerd: driver opnieuw geïnstalleerd en wachtrij geleegd, werkt weer. Er moet nog nieuwe toner besteld worden.",
@@ -548,7 +548,7 @@ fn examples(task: &Task) -> [(&'static str, &'static str); 2] {
                 "We compared both vendors: the first is cheaper, the second has better support and already knows our stack, saving onboarding time.",
             ),
         ],
-        Task::Command(_) => [
+        Task::Command(_) => &[
             (
                 "Instruction: maak dit zakelijker\n\nText:\nhey, die server doet het weer niet, kun je er ff naar kijken?",
                 "Beste collega,\n\nDe server is opnieuw niet bereikbaar. Zou je ernaar kunnen kijken?",
@@ -558,7 +558,7 @@ fn examples(task: &Task) -> [(&'static str, &'static str); 2] {
                 "1. Back up the database.\n2. Run the migration.\n3. Restart the API.",
             ),
         ],
-        Task::Cleanup => [
+        Task::Cleanup => &[
             (
                 "de afspraak is donderdag om twee uur nee wacht vrijdag om drie uur en kun je Pieter ook uitnodigen",
                 "De afspraak is vrijdag om drie uur. Kun je Pieter ook uitnodigen?",
@@ -567,8 +567,16 @@ fn examples(task: &Task) -> [(&'static str, &'static str); 2] {
                 "I looked at the server and I think we should, no, we have to update the DNS settings first and then restart it",
                 "I looked at the server and we have to update the DNS settings first and then restart it.",
             ),
+            (
+                "Stuur de factuur naar Jansen, nee wacht, naar Bakker, en zet er de offerte bij.",
+                "Stuur de factuur naar Bakker, en zet er de offerte bij.",
+            ),
+            (
+                "The meeting is at ten, sorry, at eleven, in the small room",
+                "The meeting is at eleven, in the small room.",
+            ),
         ],
-        Task::Format(FormatStyle::Text) => [
+        Task::Format(FormatStyle::Text) => &[
             (
                 "hoi Sanne even een update we hebben de offerte verstuurd en de klant reageert volgende week verder moeten we nog de planning maken en de facturen controleren groet Renzo",
                 "Hoi Sanne,\n\nEven een update: we hebben de offerte verstuurd en de klant reageert volgende week.\n\nVerder moeten we nog:\n- de planning maken\n- de facturen controleren\n\nGroet,\nRenzo",
@@ -578,7 +586,7 @@ fn examples(task: &Task) -> [(&'static str, &'static str); 2] {
                 "For the release we need three things:\n1. The changelog\n2. The installer\n3. A blog post",
             ),
         ],
-        Task::Format(FormatStyle::Note) => [
+        Task::Format(FormatStyle::Note) => &[
             (
                 "ja dus ik heb net gebeld met Jan van Bakker BV en hij heeft problemen met zijn Outlook die steeds vastloopt ik heb gezegd dat we morgen even meekijken via TeamViewer",
                 "Gebeld met Jan (Bakker BV): Outlook loopt steeds vast. Morgen meekijken via TeamViewer.",
@@ -588,7 +596,7 @@ fn examples(task: &Task) -> [(&'static str, &'static str); 2] {
                 "Talked to Lisa about the new laptop: needed before Monday, prefers the 14-inch model.",
             ),
         ],
-        Task::Format(FormatStyle::List) => [
+        Task::Format(FormatStyle::List) => &[
             (
                 "voor kantoor moeten we nog koffie melk en suikerzakjes halen en ook nog wat printpapier",
                 "Voor kantoor halen:\n- koffie\n- melk\n- suikerzakjes\n- printpapier",
@@ -598,7 +606,7 @@ fn examples(task: &Task) -> [(&'static str, &'static str); 2] {
                 "Before the demo, check:\n- the projector\n- the wifi password\n- whether the slides are updated",
             ),
         ],
-        Task::Format(FormatStyle::Timelog) => [
+        Task::Format(FormatStyle::Timelog) => &[
             (
                 "ik ben ongeveer drie kwartier bezig geweest bij De Vries met de printer die niet wilde afdrukken ik heb de driver opnieuw geïnstalleerd en de wachtrij geleegd nu werkt het weer alleen moet ik nog toner bestellen",
                 "45 min · De Vries, printer drukte niet af\n- Driver opnieuw geïnstalleerd.\n- Afdrukwachtrij geleegd.\n- Printer werkt weer.\n- Nog doen: toner bestellen.",
@@ -608,7 +616,7 @@ fn examples(task: &Task) -> [(&'static str, &'static str); 2] {
                 "Server migration\n- Copied the shares to the new server.\n- Updated the login scripts.\n- To do: test the backups.",
             ),
         ],
-        Task::Summarize => [
+        Task::Summarize => &[
             (
                 "ja dus het gesprek met de leverancier ging goed ze kunnen de levering naar maandag halen maar de prijs gaat wel vijf procent omhoog en ze willen een contract voor twee jaar",
                 "- Levering kan naar maandag.\n- Prijs gaat 5% omhoog.\n- Leverancier wil een contract van twee jaar.",
@@ -644,10 +652,11 @@ fn system_prompt(task: &Task, language: Option<&str>) -> String {
              language unless the instruction asks for another."
         }
         Task::Cleanup => {
-            "Clean up dictated text from speech recognition: fix punctuation and capitalization, and \
-             when the speaker corrects themselves ('Thursday, no wait, Friday') keep only the \
-             correction. Keep every other word, in the speaker's order; never rephrase, shorten, \
-             add line breaks or lists."
+            "Clean up dictated text from speech recognition: fix punctuation and capitalization. When \
+             the speaker corrects themselves ('Thursday, no wait, Friday', 'at ten, sorry, at \
+             eleven'), delete the wrong part and the words 'no wait' / 'nee wacht' / 'sorry', keeping \
+             only the correction. Keep every other word, in the speaker's order; never rephrase, \
+             shorten, add line breaks or lists."
         }
         Task::Format(FormatStyle::Text) => {
             "Turn dictated text from speech recognition into neatly written text: fix punctuation \
@@ -679,13 +688,16 @@ fn system_prompt(task: &Task, language: Option<&str>) -> String {
     if matches!(task, Task::Transform(Transform::Translate)) {
         return format!("{job} {RULES_TRANSLATE}");
     }
-    if matches!(task, Task::Command(_)) {
-        return format!("{job} Never add facts the text or the instruction doesn't give you.");
-    }
     let language = match language.and_then(language_name) {
         Some(name) => format!(" The text is in {name}; write in {name}."),
         None => " Write in the same language as the text.".to_owned(),
     };
+    if matches!(task, Task::Command(_)) {
+        return format!(
+            "{job} Never add facts the text or the instruction doesn't give you.{language} Only \
+             translate when the instruction asks for it."
+        );
+    }
     format!("{job} {RULES}{language}")
 }
 
@@ -736,7 +748,7 @@ pub async fn apply(
     language: Option<&str>,
 ) -> anyhow::Result<String> {
     let mut messages = vec![msg("system", system_prompt(task, language))];
-    for (input, output) in examples(task) {
+    for &(input, output) in examples(task) {
         messages.push(msg("user", input));
         messages.push(msg("assistant", output));
     }
@@ -744,7 +756,13 @@ pub async fn apply(
     // ~3 characters per token, plus room for list markup.
     let max_tokens = match task {
         Task::Command(instruction) => {
-            messages.push(msg("user", format!("Instruction: {instruction}\n\nText:\n{text}")));
+            // Small models drift into English unless the language is said
+            // right next to the instruction, not only in the system prompt.
+            let keep = match language.and_then(language_name) {
+                Some(name) => format!(" (keep the text in {name})"),
+                None => String::new(),
+            };
+            messages.push(msg("user", format!("Instruction: {instruction}{keep}\n\nText:\n{text}")));
             chars + 256
         }
         _ => {
