@@ -13,7 +13,7 @@ use futures_util::StreamExt;
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, State, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, State, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 use pipeline::{Dictation, HistoryEntry};
@@ -243,6 +243,11 @@ pub fn run() {
                 dictation: Mutex::new(Dictation::Idle),
                 history: Mutex::new(VecDeque::new()),
             });
+            // Created here rather than from the config, so its first invoke
+            // can't run before AppState is managed (the bundled page loads fast).
+            if let Some(main) = app.config().app.windows.iter().find(|w| w.label == "main") {
+                WebviewWindowBuilder::from_config(app, main)?.build()?;
+            }
 
             warm_up(app.handle());
             place_pill(app.handle())?;
