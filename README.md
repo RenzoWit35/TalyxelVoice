@@ -21,6 +21,7 @@ Hold the hotkey, talk, let go: the text is pasted wherever your cursor is.
 |---|---|---|
 | Hotkey state machine | `src-tauri/src/pipeline.rs` | Hold to talk; a tap (<350 ms) toggles hands-free, tap again to stop. |
 | Audio capture | `src-tauri/src/audio.rs` | Stream runs on its own thread only while recording, so the Windows mic indicator is off when idle. |
+| Cleanup & summary | `src-tauri/src/polish.rs` | Rule-based filler/stutter removal, then optional formatting or a summary by a small text model (bundled `llama-server`, or your own chat endpoint). |
 | Engines | `src-tauri/src/stt.rs` | `LocalWhisper` keeps the model + decoder state warm; the remote engine speaks the OpenAI transcription API. |
 | OS glue | `src-tauri/src/platform.rs` | Focused-app detection, paste via `SendInput`, overlay that never steals focus. |
 | Settings UI | `index.html`, `src/main.ts` | Engine, models, server, language and dictionary, hotkey, microphone. |
@@ -42,6 +43,30 @@ npm run tauri dev
 ```
 
 Then open the Engine tab and download a model (`small-q5_1` is a good default on CPU).
+
+`npm run tauri dev`/`build` first runs `npm run fetch-llama`, which downloads a pinned llama.cpp CPU
+build (checksum-verified) into `src-tauri/llama/`. It is bundled as a resource; plain `cargo` commands
+need it to exist too, so run `npm run fetch-llama` once after cloning.
+
+## Cleanup, formatting and summaries
+
+After whisper, each dictation goes through the mode picked under **Cleanup & summary**:
+
+- **As spoken**: pasted as heard.
+- **Clean up** (default): filler words (uh, um, eh) and stutters ("we should, we should") are
+  removed by rules. Instant, no model.
+- **Format**: clean up, then a text model adds paragraphs and bullet lists.
+
+The **summary hotkey** (default `Alt+Shift+Space`) works like the dictation hotkey but pastes a
+few bullets summarizing what you said.
+
+The text model is `qwen2.5-1.5b` (1 GB), picked because smaller models translated Dutch to English.
+It runs in a separate `llama-server` process: started when you press a hotkey that needs it (so it
+loads while you talk), stopped after 5 minutes idle, and tied to the app with a Windows job object so
+it can't outlive a crash. It uses a third of the cores, and adds a few seconds per dictation on a
+laptop CPU. For better and faster results, point it at a bigger model on your server
+(`/v1/chat/completions`: llama-server, Ollama, LM Studio, vLLM). If the model fails or answers with
+something that isn't a rewrite, the plain text is pasted and the pill says so.
 
 ## Using your own server
 
@@ -112,6 +137,7 @@ http feed).
 
 - [x] **M1 — Core dictation.** Push-to-talk and hands-free, local whisper or own server, paste
       anywhere, clipboard restore, history, personal dictionary, language and code-switching hints.
+- [x] **Cleanup & summary.** Filler removal, formatting and a summary hotkey (see above).
 - [ ] **M2 — Per-app voice modes.** The focused app is already captured at key-down
       (`FocusedApp.exe`). Map app → mode (Outlook: email tone; VS Code/terminals: code-aware
       casing, no trailing period; Slack: casual; Notion/Obsidian: Markdown), then run an optional
@@ -124,3 +150,10 @@ http feed).
       punctuation ("new paragraph", "comma").
 - [ ] **Later:** Vulkan GPU build for Intel Arc / AMD iGPUs, a modifier-only hotkey (e.g. hold
       Right-Ctrl) via a low-level keyboard hook, streaming partial results, macOS.
+
+## Third-party
+
+`llama-server` and its DLLs come unmodified from [llama.cpp](https://github.com/ggml-org/llama.cpp)
+(MIT), build pinned in `scripts/fetch-llama.mjs`. The default text model is
+[Qwen2.5-1.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF) (Apache-2.0),
+downloaded on request.

@@ -1,9 +1,10 @@
 import { listen } from "@tauri-apps/api/event";
 
 type PillEvent =
-  | { state: "listening"; hands_free: boolean }
+  | { state: "listening"; hands_free: boolean; summary: boolean }
   | { state: "level"; level: number }
   | { state: "transcribing" }
+  | { state: "polishing"; summary: boolean }
   | { state: "error"; message: string };
 
 const BAR_COUNT = 9;
@@ -25,7 +26,9 @@ listen<PillEvent>("pill", ({ payload }) => {
   switch (payload.state) {
     case "listening":
       pill.dataset.state = "listening";
-      label.textContent = payload.hands_free ? "Hands-free · tap to stop" : "Listening";
+      label.textContent = payload.summary
+        ? payload.hands_free ? "Summary · tap to stop" : "Summary · listening"
+        : payload.hands_free ? "Hands-free · tap to stop" : "Listening";
       history.fill(0);
       break;
     case "level":
@@ -35,6 +38,10 @@ listen<PillEvent>("pill", ({ payload }) => {
       pill.dataset.state = "transcribing";
       label.textContent = "Transcribing";
       bars.forEach((b) => (b.style.height = ""));
+      break;
+    case "polishing":
+      pill.dataset.state = "transcribing";
+      label.textContent = payload.summary ? "Summarizing" : "Formatting";
       break;
     case "error":
       pill.dataset.state = "error";

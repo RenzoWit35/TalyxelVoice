@@ -13,6 +13,7 @@
         <div class="brand"><span class="brand-dot"></span>TalyxelVoice</div>
         <button class="nav active" data-tab="home">Dictation</button>
         <button class="nav" data-tab="engine">Engine</button>
+        <button class="nav" data-tab="cleanup">Cleanup &amp; summary</button>
         <button class="nav" data-tab="language">Language &amp; words</button>
         <button class="nav" data-tab="general">General</button>
         <div class="sidebar-foot" id="engine-badge"></div>
@@ -29,6 +30,7 @@
             <p class="muted">
               Hold <kbd id="hotkey-hint">Ctrl+Shift+Space</kbd> and speak, release to paste.
               Tap it once for hands-free; tap again to stop.
+              <kbd id="summary-hint">Alt+Shift+Space</kbd> works the same but pastes a summary.
             </p>
           </header>
           <h2>Recent</h2>
@@ -68,6 +70,61 @@
           </div>
         </section>
 
+        <section class="tab" id="tab-cleanup">
+          <header>
+            <h1>Cleanup &amp; summary</h1>
+            <p class="muted">What happens to your words between whisper and the text field.</p>
+          </header>
+          <div class="segmented" role="radiogroup">
+            <label><input type="radio" name="polish" value="off" /> <span>As spoken</span></label>
+            <label><input type="radio" name="polish" value="clean" /> <span>Clean up</span></label>
+            <label><input type="radio" name="polish" value="format" /> <span>Format</span></label>
+          </div>
+          <p class="muted small hint" id="polish-hint"></p>
+          <div id="format-styles" hidden>
+            <div class="segmented" role="radiogroup" aria-label="Format style">
+              <label><input type="radio" name="format-style" value="text" /> <span>Text</span></label>
+              <label><input type="radio" name="format-style" value="note" /> <span>Note</span></label>
+              <label><input type="radio" name="format-style" value="list" /> <span>List</span></label>
+              <label><input type="radio" name="format-style" value="timelog" /> <span>Time log</span></label>
+            </div>
+            <p class="muted small hint" id="format-style-hint"></p>
+          </div>
+
+          <label class="field">Summary hotkey <span class="muted small">hold it, talk, and a short summary is pasted</span>
+            <input id="summary-hotkey" class="hotkey" readonly />
+          </label>
+
+          <div class="card">
+            <h2>Text model</h2>
+            <p class="muted small">Formats and summarizes. Your own words never leave this machine unless you pick a server.</p>
+            <div class="segmented" role="radiogroup">
+              <label><input type="radio" name="text-engine" value="local" /> <span>On this device</span></label>
+              <label><input type="radio" name="text-engine" value="remote" /> <span>My server</span></label>
+            </div>
+            <div id="text-local">
+              <p class="muted small hint">
+                Runs only while needed and frees its memory after 5 minutes of quiet.
+                Adds a few seconds per dictation on a laptop CPU.
+              </p>
+              <ul id="text-models" class="models"></ul>
+            </div>
+            <div id="text-remote" hidden>
+              <p class="muted small hint">
+                Any OpenAI-compatible <code>/v1/chat/completions</code> endpoint: llama.cpp <code>llama-server</code>,
+                Ollama, LM Studio, vLLM. A bigger model there formats much better and faster.
+              </p>
+              <label class="field">URL<input id="text-url" placeholder="http://my-server:8080" /></label>
+              <label class="field">Model <span class="muted small">(as the server names it)</span><input id="text-model" placeholder="qwen2.5:7b" /></label>
+              <label class="field">API key <span class="muted small">(optional)</span><input id="text-key" type="password" autocomplete="off" /></label>
+              <div class="row">
+                <button id="text-test" class="btn">Test connection</button>
+                <span id="text-status" class="status"></span>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section class="tab" id="tab-language">
           <header>
             <h1>Language &amp; words</h1>
@@ -102,7 +159,7 @@
         <section class="tab" id="tab-general">
           <header><h1>General</h1></header>
           <label class="field">Push-to-talk hotkey <span class="muted small">click, then press the combination</span>
-            <input id="hotkey" readonly />
+            <input id="hotkey" class="hotkey" readonly />
           </label>
           <label class="field">Microphone
             <select id="microphone"><option value="">System default</option></select>

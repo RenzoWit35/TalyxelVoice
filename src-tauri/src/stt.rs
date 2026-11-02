@@ -13,6 +13,13 @@ pub struct Request {
     pub prompt: String,
 }
 
+/// Whisper's text plus the language it heard (set or detected), as a code
+/// like "nl"; the text model needs it to avoid translating.
+pub struct Transcript {
+    pub text: String,
+    pub language: Option<String>,
+}
+
 impl Request {
     pub fn new(samples: Vec<f32>, settings: &Settings) -> Self {
         Self {
@@ -32,7 +39,7 @@ pub struct LocalWhisper {
 }
 
 impl LocalWhisper {
-    pub fn transcribe(&self, model: &Path, req: &Request) -> anyhow::Result<String> {
+    pub fn transcribe(&self, model: &Path, req: &Request) -> anyhow::Result<Transcript> {
         let mut guard = self.loaded.lock().unwrap();
         if guard.as_ref().map(|(p, _)| p.as_path()) != Some(model) {
             *guard = None;
@@ -80,7 +87,10 @@ impl LocalWhisper {
         for segment in state.as_iter() {
             text.push_str(&segment.to_str_lossy().map_err(|e| anyhow!("{e}"))?);
         }
-        Ok(clean(&text))
+        let language = req.language.clone().or_else(|| {
+            whisper_rs::get_lang_str(state.full_lang_id_from_state()).map(str::to_owned)
+        });
+        Ok(Transcript { text: clean(&text), language })
     }
 
     /// Loads the model and runs it once on silence so the first real
@@ -184,9 +194,12 @@ pub async fn transcribe(
     local: Arc<LocalWhisper>,
     models_dir: &Path,
     req: Request,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<Transcript> {
     match settings.engine {
-        Engine::Remote => transcribe_remote(&settings.remote, &req).await,
+        Engine::Remote => {
+            let text = transcribe_remote(&settings.remote, &req).await?;
+            Ok(Transcript { text, language: req.language })
+        }
         Engine::Local => {
             let model = crate::settings::model_path(models_dir, &settings.local_model);
             // whisper is CPU-bound; keep it off the async workers.
@@ -262,7 +275,7 @@ mod tests {
             settings.language = language.into();
             let req = Request::new(samples.clone(), &settings);
             let started = std::time::Instant::now();
-            text = whisper.transcribe(Path::new(&model), &req).unwrap();
+            text = whisper.transcribe(Path::new(&model), &req).unwrap().text;
             println!("[{language}: {:?}] {text}", started.elapsed());
         }
         assert!(text.to_lowercase().contains("pull request"), "got: {text}");

@@ -1,12 +1,19 @@
 :root {
-  --bg: #f6f5f2;
+  --bg: #f4f6f5;
   --panel: #ffffff;
-  --sidebar: #eeece7;
-  --ink: #17161a;
-  --muted: #6b6870;
-  --line: #e2dfd8;
-  --accent: #6d4aff;
-  --accent-soft: #ece6ff;
+  --sidebar: #e9eeed;
+  --ink: #131a1b;
+  --muted: #5d6b6e;
+  --line: #dbe2e1;
+  /* Talyxel logo: teal #23CBE0 and gold #FFC430. The bright teal is too
+     light for outlines on white, so lines use a deeper one in light mode. */
+  --accent: #0a8696;
+  --accent-fill: #23cbe0;
+  --accent-ink: #06262b;
+  --accent-soft: #ddf5f8;
+  --gold: #ffc430;
+  --gold-line: #b98500;
+  --gold-soft: #fff3d1;
   --ok: #1f8a4c;
   --bad: #c2352b;
   --radius: 10px;
@@ -20,14 +27,17 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #131217;
-    --panel: #1b1a20;
-    --sidebar: #0f0e12;
-    --ink: #ecebef;
-    --muted: #9a97a3;
-    --line: #2a2830;
-    --accent: #8f72ff;
-    --accent-soft: #2a2343;
+    /* Neutral greys; the logo colors are the only tint. */
+    --bg: #242526;
+    --panel: #2e3031;
+    --sidebar: #1c1d1e;
+    --ink: #ececec;
+    --muted: #a6aaad;
+    --line: #3d4042;
+    --accent: #23cbe0;
+    --accent-soft: #1d4146;
+    --gold-line: #ffc430;
+    --gold-soft: #3a2e0e;
     --ok: #4cc27f;
     --bad: #ff6b5f;
   }
@@ -48,7 +58,7 @@ kbd { background: var(--panel); border: 1px solid var(--line); border-bottom-wid
 
 .sidebar { background: var(--sidebar); padding: 18px 12px; display: flex; flex-direction: column; gap: 2px; border-right: 1px solid var(--line); }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 650; padding: 4px 10px 18px; }
-.brand-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.brand-dot { width: 10px; height: 10px; border-radius: 50%; background: linear-gradient(135deg, var(--accent-fill) 50%, var(--gold) 50%); box-shadow: 0 0 0 4px var(--accent-soft); }
 .nav { all: unset; padding: 8px 10px; border-radius: 8px; cursor: pointer; color: var(--muted); }
 .nav:hover { color: var(--ink); }
 .nav.active { background: var(--panel); color: var(--ink); font-weight: 600; }
@@ -78,18 +88,20 @@ input:not([type="radio"]):not([type="checkbox"]), select, textarea {
 }
 input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
 textarea { resize: vertical; font-family: "Cascadia Code", Consolas, monospace; font-size: 13px; }
-#hotkey { cursor: pointer; font-family: "Cascadia Code", Consolas, monospace; }
+.hotkey { cursor: pointer; font-family: "Cascadia Code", Consolas, monospace; }
+.hint { margin-top: 10px; }
+.card .segmented { margin: 4px 0 2px; }
 .check { display: flex; align-items: center; gap: 8px; margin: 14px 0; }
 
 .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .btn { font: inherit; font-size: 13px; cursor: pointer; border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 7px; padding: 5px 12px; white-space: nowrap; }
 .btn:hover:not(:disabled) { border-color: var(--accent); }
 .btn:disabled { opacity: 0.6; cursor: default; }
-.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary { background: var(--accent-fill); border-color: var(--accent-fill); color: var(--accent-ink); }
 .btn.primary:hover:not(:disabled) { filter: brightness(1.08); }
 .btn[hidden] { display: none; }
 .banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; max-width: 640px;
-  background: var(--accent-soft); border: 1px solid var(--accent); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 20px; }
+  background: var(--gold-soft); border: 1px solid var(--gold-line); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 20px; }
 .banner[hidden] { display: none; }
 .btn.ghost { border-color: transparent; background: none; color: var(--muted); padding: 2px 8px; }
 .status { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }

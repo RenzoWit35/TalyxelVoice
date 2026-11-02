@@ -30,7 +30,7 @@ anyhow = "1.0.104"
 log = "0.4.35"
 futures-util = "0.3.34"
 tokio = { version = "1.54.1", features = ["time"] }
-windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Threading"] }
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Threading", "Win32_System_JobObjects"] }
 reqwest = { version = "0.13", default-features = false, features = ["multipart", "json", "rustls", "stream"] }
 tauri-plugin-log = "2.10.1"
 tauri-plugin-updater = "2.14.1"

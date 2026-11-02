@@ -137,6 +137,38 @@ mod imp {
             );
         }
     }
+
+    /// Ties `child` to this process: Windows kills it when the app exits,
+    /// including on a crash, so a helper can't linger holding gigabytes of RAM.
+    pub fn kill_with_parent(child: &std::process::Child) -> anyhow::Result<()> {
+        use std::os::windows::io::AsRawHandle;
+        use std::sync::OnceLock;
+        use windows::Win32::Foundation::HANDLE;
+        use windows::Win32::System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+            SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        };
+
+        // Never closed: closing the job's last handle is what kills its members.
+        static JOB: OnceLock<Result<usize, String>> = OnceLock::new();
+        let job = JOB.get_or_init(|| unsafe {
+            let job = CreateJobObjectW(None, None).map_err(|e| e.to_string())?;
+            let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                &info as *const _ as *const std::ffi::c_void,
+                std::mem::size_of_val(&info) as u32,
+            )
+            .map_err(|e| e.to_string())?;
+            Ok(job.0 as usize)
+        });
+        let job = HANDLE(*job.as_ref().map_err(|e| anyhow::anyhow!("job object: {e}"))? as _);
+        unsafe { AssignProcessToJobObject(job, HANDLE(child.as_raw_handle()))? };
+        Ok(())
+    }
 }
 
 #[cfg(not(windows))]
@@ -152,6 +184,9 @@ mod imp {
     pub fn make_overlay(_: *mut std::ffi::c_void) {}
     pub fn show_without_focus(_: *mut std::ffi::c_void) {}
     pub fn hide_window(_: *mut std::ffi::c_void) {}
+    pub fn kill_with_parent(_: &std::process::Child) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 pub use imp::*;

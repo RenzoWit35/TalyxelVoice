@@ -1,6 +1,7 @@
 mod audio;
 mod pipeline;
 mod platform;
+mod polish;
 mod settings;
 mod stt;
 mod updates;
@@ -24,6 +25,7 @@ pub struct AppState {
     settings_path: PathBuf,
     models_dir: PathBuf,
     local: Arc<stt::LocalWhisper>,
+    text_model: Arc<polish::LocalTextModel>,
     dictation: Mutex<Dictation>,
     history: Mutex<VecDeque<HistoryEntry>>,
 }
@@ -37,6 +39,15 @@ const MODELS: &[(&str, u32)] = &[
     ("medium-q5_0", 514),
     ("large-v3-turbo-q5_0", 547),
 ];
+
+/// (name, approximate size in MB, GGUF URL) for formatting and summaries.
+/// Picked by testing on Dutch/English dictations: the smallest model that
+/// keeps the speaker's language instead of translating to English.
+const TEXT_MODELS: &[(&str, u32, &str)] = &[(
+    "qwen2.5-1.5b",
+    1066,
+    "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+)];
 
 #[derive(Serialize)]
 struct ModelInfo {
@@ -58,7 +69,7 @@ fn get_settings(state: State<AppState>) -> Settings {
 
 #[tauri::command]
 fn save_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> CmdResult<()> {
-    register_hotkey(&app, &settings.hotkey)?;
+    register_hotkeys(&app, &settings)?;
     settings.save(&state.settings_path).map_err(err)?;
     let previous = std::mem::replace(&mut *state.settings.lock().unwrap(), settings.clone());
     if previous.engine != settings.engine || previous.local_model != settings.local_model {
@@ -96,6 +107,18 @@ fn list_models(state: State<AppState>) -> Vec<ModelInfo> {
         .collect()
 }
 
+#[tauri::command]
+fn list_text_models(state: State<AppState>) -> Vec<ModelInfo> {
+    TEXT_MODELS
+        .iter()
+        .map(|&(name, size_mb, _)| ModelInfo {
+            name,
+            size_mb,
+            downloaded: settings::text_model_path(&state.models_dir, name).exists(),
+        })
+        .collect()
+}
+
 #[derive(Clone, Serialize)]
 struct Progress {
     name: String,
@@ -103,18 +126,27 @@ struct Progress {
     total: u64,
 }
 
+/// Downloads a whisper model, or a text model when `text` is set.
 #[tauri::command]
-async fn download_model(app: AppHandle, name: String) -> CmdResult<()> {
-    if !MODELS.iter().any(|(n, _)| *n == name) {
-        return Err(format!("unknown model {name}"));
-    }
+async fn download_model(app: AppHandle, name: String, text: Option<bool>) -> CmdResult<()> {
     let dir = app.state::<AppState>().models_dir.clone();
+    let (url, final_path) = if text.unwrap_or(false) {
+        let (_, _, url) = TEXT_MODELS
+            .iter()
+            .find(|(n, ..)| *n == name)
+            .ok_or_else(|| format!("unknown model {name}"))?;
+        (url.to_string(), settings::text_model_path(&dir, &name))
+    } else {
+        if !MODELS.iter().any(|(n, _)| *n == name) {
+            return Err(format!("unknown model {name}"));
+        }
+        let url = format!("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-{name}.bin");
+        (url, settings::model_path(&dir, &name))
+    };
     std::fs::create_dir_all(&dir).map_err(err)?;
-    let url = format!("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-{name}.bin");
     let resp = reqwest::get(&url).await.map_err(err)?.error_for_status().map_err(err)?;
     let total = resp.content_length().unwrap_or(0);
-    let final_path = settings::model_path(&dir, &name);
-    let part = final_path.with_extension("bin.part");
+    let part = final_path.with_extension("part");
     let mut file = std::fs::File::create(&part).map_err(err)?;
     let mut downloaded = 0u64;
     let mut last_emit = 0u64;
@@ -139,17 +171,38 @@ async fn test_remote(remote: RemoteSettings) -> CmdResult<String> {
 }
 
 #[tauri::command]
+async fn test_text_remote(remote: RemoteSettings) -> CmdResult<String> {
+    polish::test_remote(&remote).await.map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
 fn get_history(state: State<AppState>) -> Vec<HistoryEntry> {
     state.history.lock().unwrap().iter().cloned().collect()
 }
 
-fn register_hotkey(app: &AppHandle, hotkey: &str) -> CmdResult<()> {
-    let shortcut: Shortcut = hotkey
-        .parse()
-        .map_err(|e| format!("invalid hotkey {hotkey:?}: {e}"))?;
+fn parse_hotkey(hotkey: &str) -> CmdResult<Shortcut> {
+    hotkey.parse().map_err(|e| format!("invalid hotkey {hotkey:?}: {e}"))
+}
+
+fn register_hotkeys(app: &AppHandle, settings: &Settings) -> CmdResult<()> {
+    let dictate = parse_hotkey(&settings.hotkey)?;
+    let summary = parse_hotkey(&settings.summary_hotkey)?;
+    if dictate.id() == summary.id() {
+        return Err("the dictation and summary hotkeys must differ".into());
+    }
     let gs = app.global_shortcut();
     gs.unregister_all().map_err(err)?;
-    gs.register(shortcut).map_err(|e| format!("couldn't register {hotkey}: {e}"))
+    for (shortcut, name) in [(dictate, &settings.hotkey), (summary, &settings.summary_hotkey)] {
+        gs.register(shortcut).map_err(|e| format!("couldn't register {name}: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Whether `shortcut` is the summary hotkey rather than the dictation one.
+fn is_summary_hotkey(app: &AppHandle, shortcut: &Shortcut) -> bool {
+    let Some(state) = app.try_state::<AppState>() else { return false };
+    let hotkey = state.settings.lock().unwrap().summary_hotkey.clone();
+    parse_hotkey(&hotkey).is_ok_and(|s| s.id() == shortcut.id())
 }
 
 fn show_main(app: &AppHandle) {
@@ -221,8 +274,9 @@ pub fn run() {
         .manage(updates::Updates::default())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
-                    pipeline::on_hotkey(app, event.state() == ShortcutState::Pressed);
+                .with_handler(|app, shortcut, event| {
+                    let summary = is_summary_hotkey(app, shortcut);
+                    pipeline::on_hotkey(app, event.state() == ShortcutState::Pressed, summary);
                 })
                 .build(),
         )
@@ -232,14 +286,16 @@ pub fn run() {
             let settings_path = config_dir.join("settings.json");
             let settings = Settings::load(&settings_path);
 
-            if let Err(e) = register_hotkey(app.handle(), &settings.hotkey) {
+            if let Err(e) = register_hotkeys(app.handle(), &settings) {
                 log::error!("{e}");
             }
+            let llama_server = app.path().resource_dir()?.join("llama").join("llama-server.exe");
             app.manage(AppState {
                 settings: Mutex::new(settings),
                 settings_path,
                 models_dir: data_dir.join("models"),
                 local: Arc::new(stt::LocalWhisper::default()),
+                text_model: polish::LocalTextModel::new(llama_server),
                 dictation: Mutex::new(Dictation::Idle),
                 history: Mutex::new(VecDeque::new()),
             });
@@ -296,7 +352,9 @@ pub fn run() {
             save_settings,
             list_microphones,
             list_models,
+            list_text_models,
             download_model,
+            test_text_remote,
             test_remote,
             get_history,
             app_version,

@@ -2,12 +2,24 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 type Engine = "local" | "remote";
+type Polish = "off" | "clean" | "format";
+type FormatStyle = "text" | "note" | "list" | "timelog";
+
+interface Remote {
+  url: string;
+  api_key: string;
+  model: string;
+}
 
 interface Settings {
   hotkey: string;
+  summary_hotkey: string;
+  polish: Polish;
+  format_style: FormatStyle;
+  text_model: { engine: Engine; local_model: string; remote: Remote };
   engine: Engine;
   local_model: string;
-  remote: { url: string; api_key: string; model: string };
+  remote: Remote;
   language: string;
   spoken_languages: string[];
   dictionary: string[];
@@ -79,6 +91,37 @@ function renderBadge() {
     settings.engine === "local" ? `On device · ${settings.local_model}` : `Server · ${settings.remote.model || "default"}`;
   $("engine-badge").textContent = label;
   $("hotkey-hint").textContent = settings.hotkey;
+  $("summary-hint").textContent = settings.summary_hotkey;
+}
+
+const POLISH_HINTS: Record<Polish, string> = {
+  off: "Pastes exactly what whisper heard.",
+  clean: "Removes filler words (uh, um, eh) and stutters like \"we should, we should\". Instant, no model needed.",
+  format: "Cleans up, then the text model reshapes it in the style below. Takes a few seconds.",
+};
+
+const FORMAT_STYLE_HINTS: Record<FormatStyle, string> = {
+  text: "Paragraphs, with a list where you sum things up. Good for emails and messages.",
+  note: "A short, businesslike note: names, numbers and agreements, without the chatter.",
+  list: "Everything as bullets, with a heading if you say what the list is for.",
+  timelog: "Time spent and subject first (only if you say the time), then what you did, in the past tense. For hour logs and tickets.",
+};
+
+function renderPolish() {
+  document.querySelectorAll<HTMLInputElement>('input[name="polish"]').forEach((r) => {
+    r.checked = r.value === settings.polish;
+  });
+  $("polish-hint").textContent = POLISH_HINTS[settings.polish];
+  $("format-styles").hidden = settings.polish !== "format";
+  document.querySelectorAll<HTMLInputElement>('input[name="format-style"]').forEach((r) => {
+    r.checked = r.value === settings.format_style;
+  });
+  $("format-style-hint").textContent = FORMAT_STYLE_HINTS[settings.format_style];
+  document.querySelectorAll<HTMLInputElement>('input[name="text-engine"]').forEach((r) => {
+    r.checked = r.value === settings.text_model.engine;
+  });
+  $("text-local").hidden = settings.text_model.engine !== "local";
+  $("text-remote").hidden = settings.text_model.engine !== "remote";
 }
 
 function renderEngine() {
@@ -90,12 +133,17 @@ function renderEngine() {
 }
 
 async function renderModels() {
-  const models = await invoke<ModelInfo[]>("list_models");
-  const list = $("models");
+  await Promise.all([renderModelList(false), renderModelList(true)]);
+}
+
+async function renderModelList(text: boolean) {
+  const models = await invoke<ModelInfo[]>(text ? "list_text_models" : "list_models");
+  const list = $(text ? "text-models" : "models");
+  const current = () => (text ? settings.text_model.local_model : settings.local_model);
   list.replaceChildren(
     ...models.map((m) => {
       const li = document.createElement("li");
-      li.className = "model" + (m.name === settings.local_model ? " selected" : "");
+      li.className = "model" + (m.name === current() ? " selected" : "");
       const info = document.createElement("div");
       info.innerHTML = `<b>${m.name}</b><span class="muted small">${m.size_mb} MB</span>`;
       const action = document.createElement("button");
@@ -106,14 +154,15 @@ async function renderModels() {
         action.disabled = true;
       } else if (!m.downloaded) {
         action.textContent = "Download";
-        action.onclick = () => download(m.name);
-      } else if (m.name === settings.local_model) {
+        action.onclick = () => download(m.name, text);
+      } else if (m.name === current()) {
         action.textContent = "In use";
         action.disabled = true;
       } else {
         action.textContent = "Use";
         action.onclick = () => {
-          settings.local_model = m.name;
+          if (text) settings.text_model.local_model = m.name;
+          else settings.local_model = m.name;
           save(true);
           renderModels();
         };
@@ -124,15 +173,20 @@ async function renderModels() {
   );
 }
 
-async function download(name: string) {
+async function download(name: string, text: boolean) {
   downloading.set(name, 0);
   renderModels();
   try {
-    await invoke("download_model", { name });
+    await invoke("download_model", { name, text });
     toast(`${name} downloaded`);
-    const current = (await invoke<ModelInfo[]>("list_models")).find((m) => m.name === settings.local_model);
-    if (!current?.downloaded) {
-      settings.local_model = name;
+    if (!text) {
+      const current = (await invoke<ModelInfo[]>("list_models")).find((m) => m.name === settings.local_model);
+      if (!current?.downloaded) {
+        settings.local_model = name;
+        save(true);
+      }
+    } else if (settings.text_model.local_model !== name) {
+      settings.text_model.local_model = name;
       save(true);
     }
   } catch (e) {
@@ -217,8 +271,53 @@ function bindInputs() {
   restore.checked = settings.restore_clipboard;
   restore.onchange = () => ((settings.restore_clipboard = restore.checked), save(true));
 
-  const hotkey = $<HTMLInputElement>("hotkey");
-  hotkey.value = settings.hotkey;
+  bindHotkey("hotkey", "hotkey");
+  bindHotkey("summary-hotkey", "summary_hotkey");
+
+  document.querySelectorAll<HTMLInputElement>('input[name="polish"]').forEach((r) =>
+    r.addEventListener("change", () => {
+      settings.polish = r.value as Polish;
+      renderPolish();
+      save(true);
+    }),
+  );
+  document.querySelectorAll<HTMLInputElement>('input[name="format-style"]').forEach((r) =>
+    r.addEventListener("change", () => {
+      settings.format_style = r.value as FormatStyle;
+      renderPolish();
+      save(true);
+    }),
+  );
+  document.querySelectorAll<HTMLInputElement>('input[name="text-engine"]').forEach((r) =>
+    r.addEventListener("change", () => {
+      settings.text_model.engine = r.value as Engine;
+      renderPolish();
+      save(true);
+    }),
+  );
+  const textRemote = settings.text_model.remote;
+  for (const [id, field] of [["text-url", "url"], ["text-model", "model"], ["text-key", "api_key"]] as const) {
+    const input = $<HTMLInputElement>(id);
+    input.value = textRemote[field];
+    input.oninput = () => ((textRemote[field] = input.value.trim()), save());
+  }
+  $("text-test").onclick = async () => {
+    const status = $("text-status");
+    status.className = "status";
+    status.textContent = "Testing…";
+    try {
+      status.textContent = await invoke<string>("test_text_remote", { remote: textRemote });
+      status.classList.add("ok");
+    } catch (e) {
+      status.textContent = String(e);
+      status.classList.add("bad");
+    }
+  };
+}
+
+function bindHotkey(id: string, key: "hotkey" | "summary_hotkey") {
+  const hotkey = $<HTMLInputElement>(id);
+  hotkey.value = settings[key];
   hotkey.addEventListener("keydown", (e) => {
     e.preventDefault();
     if (["Control", "Shift", "Alt", "Meta"].includes(e.key)) return;
@@ -233,13 +332,13 @@ function bindInputs() {
     }
     parts.push(e.code.replace(/^Key/, "").replace(/^Digit/, ""));
     const combo = parts.join("+");
-    const previous = settings.hotkey;
-    settings.hotkey = combo;
+    const previous = settings[key];
+    settings[key] = combo;
     hotkey.value = combo;
     invoke("save_settings", { settings })
       .then(() => (toast(`Hotkey set to ${combo}`), renderBadge()))
       .catch((err) => {
-        settings.hotkey = previous;
+        settings[key] = previous;
         hotkey.value = previous;
         toast(String(err), true);
       });
@@ -307,6 +406,7 @@ async function init() {
   settings = await invoke<Settings>("get_settings");
   renderBadge();
   renderEngine();
+  renderPolish();
   bindInputs();
   await Promise.all([renderModels(), loadMicrophones(), initUpdates()]);
 

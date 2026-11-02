@@ -7,6 +7,8 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::audio::{self, Recording, WHISPER_RATE};
 use crate::platform::{self, FocusedApp};
+use crate::polish::{self, Task};
+use crate::settings::{Engine, Polish};
 use crate::stt;
 use crate::AppState;
 
@@ -24,6 +26,8 @@ pub enum Dictation {
         rec: Recording,
         started: Instant,
         hands_free: bool,
+        /// Started with the summary hotkey.
+        summary: bool,
         app: FocusedApp,
     },
     Busy,
@@ -41,9 +45,10 @@ pub struct HistoryEntry {
 #[derive(Clone, Serialize)]
 #[serde(tag = "state", rename_all = "lowercase")]
 enum Pill {
-    Listening { hands_free: bool },
+    Listening { hands_free: bool, summary: bool },
     Level { level: f32 },
     Transcribing,
+    Polishing { summary: bool },
     Error { message: String },
 }
 
@@ -67,23 +72,40 @@ fn hide_pill(app: &AppHandle) {
     }
 }
 
-pub fn on_hotkey(app: &AppHandle, pressed: bool) {
+/// `summary` says which hotkey fired. While recording, only the hotkey that
+/// started it can stop it.
+pub fn on_hotkey(app: &AppHandle, pressed: bool, summary: bool) {
     let state = app.state::<AppState>();
     let mut dictation = state.dictation.lock().unwrap();
+    if let Dictation::Recording { summary: started_with, .. } = &*dictation {
+        if *started_with != summary {
+            return;
+        }
+    }
     match (&mut *dictation, pressed) {
         (Dictation::Idle, true) => {
             let focused = platform::focused_app();
-            let mic = state.settings.lock().unwrap().microphone.clone();
-            match Recording::start(&mic) {
+            let settings = state.settings.lock().unwrap().clone();
+            match Recording::start(&settings.microphone) {
                 Ok(rec) => {
                     *dictation = Dictation::Recording {
                         rec,
                         started: Instant::now(),
                         hands_free: false,
+                        summary,
                         app: focused,
                     };
+                    // Load the text model while the user talks.
+                    let needs_model = summary || settings.polish == Polish::Format;
+                    if needs_model && settings.text_model.engine == Engine::Local {
+                        let model = crate::settings::text_model_path(
+                            &state.models_dir,
+                            &settings.text_model.local_model,
+                        );
+                        state.text_model.prestart(model);
+                    }
                     drop(dictation);
-                    pill(app, Pill::Listening { hands_free: false });
+                    pill(app, Pill::Listening { hands_free: false, summary });
                     show_pill(app);
                     spawn_level_meter(app.clone());
                 }
@@ -97,7 +119,7 @@ pub fn on_hotkey(app: &AppHandle, pressed: bool) {
             if started.elapsed() < TAP {
                 *hands_free = true;
                 drop(dictation);
-                pill(app, Pill::Listening { hands_free: true });
+                pill(app, Pill::Listening { hands_free: true, summary });
             } else {
                 drop(dictation);
                 finish(app.clone());
@@ -127,10 +149,10 @@ fn spawn_level_meter(app: AppHandle) {
 
 fn finish(app: AppHandle) {
     let state = app.state::<AppState>();
-    let (rec, focused) = {
+    let (rec, focused, summary) = {
         let mut dictation = state.dictation.lock().unwrap();
         match std::mem::replace(&mut *dictation, Dictation::Busy) {
-            Dictation::Recording { rec, app, .. } => (rec, app),
+            Dictation::Recording { rec, app, summary, .. } => (rec, app, summary),
             other => {
                 *dictation = other;
                 return;
@@ -140,17 +162,24 @@ fn finish(app: AppHandle) {
     pill(&app, Pill::Transcribing);
 
     tauri::async_runtime::spawn(async move {
-        let result = run(&app, rec, &focused).await;
+        let result = run(&app, rec, &focused, summary).await;
         let state = app.state::<AppState>();
         *state.dictation.lock().unwrap() = Dictation::Idle;
         match result {
-            Ok(()) => hide_pill(&app),
-            Err(e) => report_error(app.clone(), e.to_string()),
+            Ok(None) => hide_pill(&app),
+            Ok(Some(warning)) | Err(warning) => report_error(app.clone(), warning.to_string()),
         }
     });
 }
 
-async fn run(app: &AppHandle, rec: Recording, focused: &FocusedApp) -> anyhow::Result<()> {
+/// Returns a warning to show when the text went in but not as asked (the text
+/// model failed and the plain transcript was pasted instead).
+async fn run(
+    app: &AppHandle,
+    rec: Recording,
+    focused: &FocusedApp,
+    summary: bool,
+) -> anyhow::Result<Option<anyhow::Error>> {
     let samples = tauri::async_runtime::spawn_blocking(move || rec.stop()).await?;
     let secs = samples.len() as f32 / WHISPER_RATE as f32;
     let peak = samples.iter().fold(0.0f32, |m, s| m.max(s.abs()));
@@ -163,7 +192,7 @@ async fn run(app: &AppHandle, rec: Recording, focused: &FocusedApp) -> anyhow::R
         let _ = audio::to_wav(&samples).map(|wav| std::fs::write(dir.join("last-dictation.wav"), wav));
     }
     if secs < MIN_SPEECH_SECS {
-        return Ok(());
+        return Ok(None);
     }
     if peak < SILENCE_PEAK {
         // Whisper invents short phrases for silence; don't paste those.
@@ -173,11 +202,37 @@ async fn run(app: &AppHandle, rec: Recording, focused: &FocusedApp) -> anyhow::R
     let settings = state.settings.lock().unwrap().clone();
     let started = Instant::now();
     let req = stt::Request::new(samples, &settings);
-    let text = stt::transcribe(&settings, state.local.clone(), &state.models_dir, req).await?;
-    let latency_ms = started.elapsed().as_millis();
-    if text.is_empty() {
-        return Ok(());
+    let transcript = stt::transcribe(&settings, state.local.clone(), &state.models_dir, req).await?;
+    if transcript.text.is_empty() {
+        return Ok(None);
     }
+    let language = transcript.language.as_deref();
+
+    let mut text = match settings.polish {
+        Polish::Off if !summary => transcript.text.clone(),
+        _ => polish::strip_fillers(&transcript.text, language),
+    };
+    let task = if summary {
+        Some(Task::Summarize)
+    } else if settings.polish == Polish::Format {
+        Some(Task::Format(settings.format_style))
+    } else {
+        None
+    };
+    let mut warning = None;
+    if let Some(task) = task {
+        pill(app, Pill::Polishing { summary: task == Task::Summarize });
+        let cfg = &settings.text_model;
+        match polish::apply(cfg, &state.text_model, &state.models_dir, task, &text, language).await {
+            Ok(polished) => text = polished,
+            Err(e) => {
+                log::warn!("{task:?} failed: {e:#}");
+                let what = if task == Task::Summarize { "summarize" } else { "format" };
+                warning = Some(anyhow::anyhow!("Couldn't {what} ({e}); pasted the plain text"));
+            }
+        }
+    }
+    let latency_ms = started.elapsed().as_millis();
 
     let restore = settings.restore_clipboard;
     let paste_text = text.clone();
@@ -187,9 +242,18 @@ async fn run(app: &AppHandle, rec: Recording, focused: &FocusedApp) -> anyhow::R
     let entry = HistoryEntry {
         text,
         app: focused.exe.clone(),
-        engine: match settings.engine {
-            crate::settings::Engine::Local => format!("local · {}", settings.local_model),
-            crate::settings::Engine::Remote => format!("server · {}", settings.remote.model),
+        engine: {
+            let engine = match settings.engine {
+                Engine::Local => format!("local · {}", settings.local_model),
+                Engine::Remote => format!("server · {}", settings.remote.model),
+            };
+            match task {
+                Some(Task::Summarize) if warning.is_none() => format!("{engine} · summary"),
+                Some(Task::Format(style)) if warning.is_none() => {
+                    format!("{engine} · {}", format!("{style:?}").to_lowercase())
+                }
+                _ => engine,
+            }
         },
         latency_ms,
         at: SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()),
@@ -200,7 +264,7 @@ async fn run(app: &AppHandle, rec: Recording, focused: &FocusedApp) -> anyhow::R
         history.truncate(HISTORY_LEN);
     }
     let _ = app.emit("history-added", entry);
-    Ok(())
+    Ok(warning)
 }
 
 fn report_error(app: AppHandle, message: String) {

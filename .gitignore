@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Fetched by scripts/fetch-llama.mjs
+src-tauri/llama/
