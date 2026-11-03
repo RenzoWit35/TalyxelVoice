@@ -91,7 +91,7 @@ something that isn't a rewrite, the plain text is pasted and the pill says so.
 |---|---|
 | `Ctrl+Shift+Space` | Hold to dictate, tap for hands-free. Pastes where the cursor is. |
 | `Alt+Shift+Space` | Same, but pastes a few summary bullets. |
-| `Ctrl+Alt+P` | Rewrites the **selected** text with the chosen transform: polish, list, translate to English, shorter, friendlier, formal, or prompt engineer (rough thoughts into a structured AI prompt). |
+| `Ctrl+Alt+P` | Rewrites the **selected** text with the chosen transform: polish, list, translate to English, shorter, friendlier, formal, or prompt engineer (rough thoughts into a structured AI prompt). The selection's language is detected from its words, so a Dutch selection comes back in Dutch; a selection too short to tell uses the Language setting. |
 | `Ctrl+Alt+Space` | Hold, say what to do with the selected text ("make this more formal"), release. |
 | `Ctrl+Alt+Z` | Undo the cleanup: pastes the last dictation (or the text a transform replaced) as it was. |
 | `Ctrl+Alt+V` | Pastes the last dictation again. |

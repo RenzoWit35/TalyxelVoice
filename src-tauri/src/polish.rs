@@ -699,6 +699,84 @@ De server is opnieuw niet bereikbaar. Zou u ernaar kunnen kijken?",
     }
 }
 
+// --- language detection -----------------------------------------------------
+
+/// Function words per language, for guessing what a selection is written in.
+/// Whisper tells us the language of dictated speech, but a selected text has
+/// no audio; small models answer in English unless the prompt names the
+/// language. Words shared between languages ("de", "in", "is") are listed for
+/// each, so they cancel out instead of tipping the balance.
+const STOPWORDS: &[(&str, &[&str])] = &[
+    (
+        "nl",
+        &[
+            "de", "het", "een", "en", "van", "ik", "je", "jij", "wij", "we", "hij", "zij", "ze", "dat", "dit",
+            "deze", "die", "niet", "op", "voor", "met", "zijn", "ook", "maar", "nog", "wel", "naar", "dan",
+            "bij", "als", "om", "uit", "over", "geen", "al", "even", "heb", "hebben", "heeft", "had", "kan",
+            "kunnen", "moet", "moeten", "wordt", "worden", "gaan", "gaat", "graag", "dus", "toch", "hoe",
+            "wat", "wie", "waarom", "mij", "mijn", "jouw", "ons", "onze", "hun", "hier", "daar", "er", "nu",
+            "morgen", "vandaag", "nee", "ja", "is", "in", "was", "te", "aan", "of", "door", "nou",
+        ],
+    ),
+    (
+        "en",
+        &[
+            "the", "and", "of", "to", "a", "in", "that", "is", "it", "for", "on", "with", "as", "was",
+            "are", "be", "this", "have", "has", "from", "or", "not", "but", "at", "by", "they", "we",
+            "you", "i", "an", "which", "would", "could", "should", "will", "can", "do", "does", "did",
+            "so", "if", "my", "your", "our", "their", "what", "when", "how", "there", "here", "about",
+            "just", "also", "more", "very", "please", "thanks", "hello", "been", "were", "them", "than",
+        ],
+    ),
+    (
+        "de",
+        &[
+            "der", "die", "das", "und", "ist", "nicht", "ich", "sie", "wir", "ein", "eine", "zu", "auch",
+            "mit", "sich", "auf", "für", "von", "dem", "den", "des", "aber", "oder", "wenn", "noch",
+            "nach", "bei", "aus", "nur", "wird", "werden", "haben", "hat", "kann", "können", "muss",
+            "müssen", "dass", "es", "im", "am", "ja", "nein", "bitte", "danke", "heute", "morgen",
+            "schon", "sehr", "hier", "dort", "in", "was", "wie", "mir", "mich", "euch", "ihr",
+        ],
+    ),
+    (
+        "fr",
+        &[
+            "le", "la", "les", "et", "est", "un", "une", "des", "du", "de", "je", "nous", "vous", "ils",
+            "elles", "pas", "ne", "que", "qui", "dans", "pour", "avec", "sur", "ce", "cette", "ces",
+            "mais", "ou", "donc", "très", "aussi", "être", "avoir", "fait", "faire", "merci", "bonjour",
+            "il", "elle", "on", "au", "aux", "en", "y", "à", "là", "son", "sa", "ses", "mon", "ma", "mes",
+        ],
+    ),
+];
+
+/// Guesses the language of `text` as a whisper code, from how many of each
+/// language's function words it uses. None when it can't tell: too short to
+/// hit two stopwords, or so mixed that no language clearly leads. Callers
+/// fall back to whisper's or the settings' language then.
+pub fn detect_language(text: &str) -> Option<&'static str> {
+    let mut scores: Vec<(&str, usize)> = STOPWORDS.iter().map(|(code, _)| (*code, 0)).collect();
+    for word in text.split_whitespace() {
+        let w = core(word);
+        if w.is_empty() {
+            continue;
+        }
+        for (i, (_, words)) in STOPWORDS.iter().enumerate() {
+            if words.contains(&w.as_str()) {
+                scores[i].1 += 1;
+            }
+        }
+    }
+    scores.sort_by_key(|&(_, hits)| std::cmp::Reverse(hits));
+    let (code, best) = scores[0];
+    let runner = scores[1].1;
+    // Two hits at least, and a clear lead: half again as many as the runner-up.
+    if best >= 2 && best > runner && best * 2 >= runner * 3 {
+        Some(code)
+    } else {
+        None
+    }
+}
+
 fn system_prompt(task: &Task, language: Option<&str>) -> String {
     let job = match task {
         Task::Transform(Transform::Polish) => {
@@ -768,7 +846,9 @@ fn system_prompt(task: &Task, language: Option<&str>) -> String {
         return format!("{job} {RULES_TRANSLATE}");
     }
     let language = match language.and_then(language_name) {
-        Some(name) => format!(" The text is in {name}; write in {name}."),
+        Some(name) if name == "English" => " The text is in English; write in English.".to_owned(),
+        // Small models drift into English unless told not to in so many words.
+        Some(name) => format!(" The text is in {name}; write in {name}, not in English."),
         None => " Write in the same language as the text.".to_owned(),
     };
     if matches!(task, Task::Command(_)) {
@@ -829,7 +909,18 @@ pub async fn apply(
     language: Option<&str>,
 ) -> anyhow::Result<String> {
     let mut messages = vec![msg("system", system_prompt(task, language))];
-    for &(input, output) in examples(task) {
+    // Translate is the one task whose output language isn't the input's.
+    let keep = match language.and_then(language_name) {
+        Some(name) if !matches!(task, Task::Transform(Transform::Translate)) => Some(name),
+        _ => None,
+    };
+    // Small models copy the last example's language more than the system
+    // prompt, so examples in the text's language go last.
+    let mut shown: Vec<_> = examples(task).iter().collect();
+    if keep.is_some() {
+        shown.sort_by_key(|(input, _)| detect_language(input) == language);
+    }
+    for &(input, output) in shown {
         messages.push(msg("user", input));
         messages.push(msg("assistant", output));
     }
@@ -839,15 +930,18 @@ pub async fn apply(
         Task::Command(instruction) => {
             // Small models drift into English unless the language is said
             // right next to the instruction, not only in the system prompt.
-            let keep = match language.and_then(language_name) {
-                Some(name) => format!(" (keep the text in {name})"),
-                None => String::new(),
-            };
+            let keep = keep.map(|name| format!(" (keep the text in {name})")).unwrap_or_default();
             messages.push(msg("user", format!("Instruction: {instruction}{keep}\n\nText:\n{text}")));
             chars + 256
         }
         _ => {
-            messages.push(msg("user", text));
+            // Same idea for transforms: the reminder goes after the text, so
+            // the model still sees the text exactly as the examples show it.
+            let user = match &keep {
+                Some(name) => format!("{text}\n\n(Answer in {name}.)"),
+                None => text.to_owned(),
+            };
+            messages.push(msg("user", user));
             (chars / 3) * 2 + 64
         }
     };
@@ -969,6 +1063,30 @@ mod tests {
     }
 
     #[test]
+    fn detects_selection_language() {
+        assert_eq!(
+            detect_language("Kun je even kijken of de levering morgen nog lukt? Anders moeten we het verzetten."),
+            Some("nl")
+        );
+        assert_eq!(
+            detect_language("Could you check whether the delivery still works tomorrow? Otherwise we move it."),
+            Some("en")
+        );
+        assert_eq!(detect_language("Können Sie prüfen, ob die Lieferung morgen noch klappt?"), Some("de"));
+        // Dutch with English jargon stays Dutch.
+        assert_eq!(
+            detect_language("Ik heb de meeting verzet omdat de deadline van de sprint review is verschoven."),
+            Some("nl")
+        );
+        // Too short to tell, or a tie.
+        assert_eq!(detect_language("Hallo allemaal"), None);
+        assert_eq!(detect_language("Fix de typo"), None);
+        assert_eq!(detect_language(""), None);
+        // Genuinely half-and-half: no guess.
+        assert_eq!(detect_language("Ik denk dat we dit doen. I think that we do this."), None);
+    }
+
+    #[test]
     fn names_languages() {
         assert_eq!(language_name("nl").as_deref(), Some("Dutch"));
         assert_eq!(language_name("xx"), None);
@@ -976,6 +1094,58 @@ mod tests {
 
     /// Runs the real model: `TALYXEL_TEST_LLM=path\to\model.gguf cargo test
     /// polish_end_to_end -- --ignored --nocapture` (needs `npm run fetch-llama`).
+    /// The transform hotkey has no whisper language, so it relies on
+    /// `detect_language`; small models answered Dutch selections in English
+    /// before. Run with `TALYXEL_TEST_LLM=<path to llm-*.gguf>`.
+    #[test]
+    #[ignore]
+    fn transforms_keep_dutch() {
+        let model = PathBuf::from(std::env::var("TALYXEL_TEST_LLM").expect("TALYXEL_TEST_LLM"));
+        let dir = model.parent().unwrap().to_owned();
+        let name = model.file_stem().unwrap().to_str().unwrap().trim_start_matches("llm-").to_owned();
+        let exe = Path::new(env!("CARGO_MANIFEST_DIR")).join("llama").join("llama-server.exe");
+        let cfg = TextModelSettings { local_model: name, ..Default::default() };
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let local = LocalTextModel {
+                exe,
+                server: tokio::sync::Mutex::new(None),
+                last_used: Mutex::new(Instant::now()),
+            };
+            let texts = [
+                "hoi Jan ik heb gekeken naar de server en volgens mij moeten we eerst de dns instellingen                  aanpassen daarna kan ie opnieuw opgestart worden",
+                "De offerte voor de nieuwe switches komt vrijdag. Pieter wil de installatie in de week van                  twaalf mei plannen, dus we moeten voor die tijd de patchkast opruimen en de uplinks checken.",
+                "Kun je de laptop van Petra even resetten? Hij blijft hangen bij het inloggen en ze heeft hem                  morgen nodig voor de presentatie bij de klant.",
+            ];
+            let transforms = [
+                Transform::Polish,
+                Transform::List,
+                Transform::Shorter,
+                Transform::Friendlier,
+                Transform::Formal,
+                Transform::Prompt,
+            ];
+            let mut failures = Vec::new();
+            for text in texts {
+                let language = detect_language(text);
+                assert_eq!(language, Some("nl"), "{text}");
+                for transform in transforms {
+                    let task = Task::Transform(transform);
+                    let out = apply(&cfg, &local, &dir, &task, text, language).await.unwrap();
+                    let seen = detect_language(&out);
+                    println!("--- {transform:?} → {seen:?}
+{out}");
+                    if seen == Some("en") {
+                        failures.push(format!("{transform:?}: {out}"));
+                    }
+                }
+            }
+            assert!(failures.is_empty(), "answered in English:
+{}", failures.join("
+"));
+        });
+    }
+
     #[test]
     #[ignore]
     fn polish_end_to_end() {

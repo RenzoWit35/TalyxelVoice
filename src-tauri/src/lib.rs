@@ -366,7 +366,8 @@ async fn rewrite(app: AppHandle, text: String, transform: Transform) -> CmdResul
     let state = app.state::<AppState>();
     let settings = state.settings.lock().unwrap().clone();
     let task = polish::Task::Transform(transform);
-    polish::apply(&settings.text_model, &state.text_model, &state.models_dir, &task, &text, None)
+    let language = polish::detect_language(&text).or_else(|| settings.language_code());
+    polish::apply(&settings.text_model, &state.text_model, &state.models_dir, &task, &text, language)
         .await
         .map_err(|e| format!("{e:#}"))
 }

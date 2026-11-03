@@ -375,6 +375,12 @@ async fn rewrite_selection(
     if words > MAX_SELECTION_WORDS {
         anyhow::bail!("That's {words} words; select at most {MAX_SELECTION_WORDS}");
     }
+    // The selection's own language counts most: whisper only knows the
+    // language of the spoken instruction, and the transform hotkey has no
+    // audio at all. A short or mixed selection falls back to those.
+    let detected = polish::detect_language(&selection);
+    let language = detected.or(language).or_else(|| settings.language_code());
+    log::info!("selection language: {language:?} (detected {detected:?})");
     let message = match &task {
         Task::Command(instruction) => format!("“{instruction}”"),
         Task::Transform(t) => format!("{t:?}"),
