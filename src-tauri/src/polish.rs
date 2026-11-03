@@ -1111,6 +1111,7 @@ mod tests {
                 exe,
                 server: tokio::sync::Mutex::new(None),
                 last_used: Mutex::new(Instant::now()),
+                use_gpu: AtomicBool::new(true),
             };
             let texts = [
                 "hoi Jan ik heb gekeken naar de server en volgens mij moeten we eerst de dns instellingen                  aanpassen daarna kan ie opnieuw opgestart worden",
