@@ -1,6 +1,6 @@
 [package]
 name = "talyxel-voice"
-version = "0.4.0"
+version = "0.4.1"
 description = "Private, local-first voice dictation"
 authors = ["Talyxel"]
 edition = "2024"
