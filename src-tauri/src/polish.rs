@@ -879,6 +879,18 @@ fn tidy_output(raw: &str) -> String {
     t.trim().to_owned()
 }
 
+/// Catches a small model that gave up on the input: it answers with one of
+/// the prompt's own examples, or gets stuck repeating a few lines until the
+/// token budget runs out (seen on a 300-line software inventory).
+fn degenerate(task: &Task, output: &str) -> bool {
+    if examples(task).iter().any(|(_, example)| example.trim() == output.trim()) {
+        return true;
+    }
+    let lines: Vec<&str> = output.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let distinct = lines.iter().collect::<std::collections::HashSet<_>>().len();
+    lines.len() >= 6 && distinct * 3 <= lines.len()
+}
+
 /// Rejects output that is clearly not a rewrite of the input: empty, or far
 /// longer than it (a model continuing the conversation instead).
 fn plausible(task: &Task, input: &str, output: &str) -> bool {
@@ -962,7 +974,7 @@ pub async fn apply(
     };
     log::info!("{task:?} took {:?}", started.elapsed());
     let out = tidy_output(&raw);
-    if !plausible(task, text, &out) {
+    if degenerate(task, &out) || !plausible(task, text, &out) {
         bail!("the text model's answer didn't look like a rewrite");
     }
     Ok(out)
@@ -1060,6 +1072,27 @@ mod tests {
         assert!(system_prompt(&Task::Transform(Transform::Translate), Some("nl")).contains("English"));
         assert!(!system_prompt(&Task::Transform(Transform::Translate), Some("nl")).contains("never translate"));
         assert!(system_prompt(&Task::Cleanup, Some("nl")).contains("Dutch"));
+    }
+
+    #[test]
+    fn rejects_degenerate_answers() {
+        let list = Task::Transform(Transform::List);
+        // The prompt's own example, echoed back.
+        assert!(degenerate(&list, "- Check the projector
+- Make sure the wifi password works
+- Update the slides"));
+        // Stuck in a loop.
+        let looped = "- Check the projector
+- Make sure the wifi password works
+- Update the slides
+".repeat(40);
+        assert!(degenerate(&list, &looped));
+        // A real list with one repeated item is fine.
+        assert!(!degenerate(&list, "- Laptop klaarzetten
+- Account aanmaken
+- Toegangspas aanvragen
+- Account aanmaken"));
+        assert!(!degenerate(&Task::Cleanup, "Ik denk dat dat klopt."));
     }
 
     #[test]
