@@ -122,6 +122,48 @@ impl Default for TextModelSettings {
     }
 }
 
+/// What the Files tab writes per recording.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FileFormat {
+    /// A heading, date, length and language, then the text in paragraphs.
+    Md,
+    /// Just the text.
+    Txt,
+    /// Subtitles, one cue per whisper segment.
+    Srt,
+}
+
+impl FileFormat {
+    pub fn extension(self) -> &'static str {
+        match self {
+            FileFormat::Md => "md",
+            FileFormat::Txt => "txt",
+            FileFormat::Srt => "srt",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FileSettings {
+    /// Source folders, transcribed in this order.
+    pub folders: Vec<String>,
+    /// Where the transcripts go, one subfolder per source folder.
+    pub target: String,
+    pub format: FileFormat,
+    /// Include recordings in subfolders, mirrored under the target.
+    pub recursive: bool,
+    /// Leave recordings alone that already have a transcript in the target.
+    pub skip_existing: bool,
+}
+
+impl Default for FileSettings {
+    fn default() -> Self {
+        Self { folders: Vec::new(), target: String::new(), format: FileFormat::Md, recursive: false, skip_existing: true }
+    }
+}
+
 /// A phrase you say, and the text that goes in instead.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -178,6 +220,8 @@ pub struct Settings {
     pub keep_history: bool,
     /// Drop saved dictations older than this at startup; 0 keeps them forever.
     pub history_days: u32,
+    /// The Files tab: folders of recordings to transcribe in one go.
+    pub files: FileSettings,
 }
 
 impl Default for Settings {
@@ -208,6 +252,7 @@ impl Default for Settings {
             autostart: false,
             keep_history: true,
             history_days: 14,
+            files: FileSettings::default(),
         }
     }
 }

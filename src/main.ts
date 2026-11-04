@@ -37,6 +37,32 @@ interface Settings {
   autostart: boolean;
   keep_history: boolean;
   history_days: number;
+  files: FileSettings;
+}
+
+type FileFormat = "md" | "txt" | "srt";
+
+interface FileSettings {
+  folders: string[];
+  target: string;
+  format: FileFormat;
+  recursive: boolean;
+  skip_existing: boolean;
+}
+
+interface FilesStatus {
+  running: boolean;
+  stopping: boolean;
+  total: number;
+  done: number;
+  ok: number;
+  failed: number;
+  skipped: number;
+  current: string;
+  percent: number;
+  eta_secs: number | null;
+  target: string;
+  log: { ok: boolean; text: string }[];
 }
 
 type Transform = "polish" | "list" | "translate" | "shorter" | "friendlier" | "formal" | "prompt";
@@ -922,6 +948,151 @@ async function initNotes() {
   await listen<Note>("note-updated", (e) => noteUpdated(e.payload));
 }
 
+// --- files ---
+const FORMAT_NOTES: Record<FileFormat, string> = {
+  md: "A heading with the date, length and language, then the text in paragraphs.",
+  txt: "Just the text, in paragraphs.",
+  srt: "Subtitles with a time range per sentence.",
+};
+
+function seconds(s: number) {
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = Math.floor(s % 60);
+  return h ? `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}` : `${m}:${String(sec).padStart(2, "0")}`;
+}
+
+function renderFileSettings() {
+  const f = settings.files;
+  const list = $("files-folders");
+  list.replaceChildren(
+    ...f.folders.map((folder, i) => {
+      const li = document.createElement("li");
+      const name = document.createElement("span");
+      name.textContent = folder;
+      name.title = folder;
+      const remove = document.createElement("button");
+      remove.className = "btn ghost";
+      remove.textContent = "Remove";
+      remove.disabled = filesRunning;
+      remove.addEventListener("click", () => {
+        f.folders.splice(i, 1);
+        renderFileSettings();
+        save();
+      });
+      li.append(name, remove);
+      return li;
+    }),
+  );
+  $("files-folders-empty").hidden = f.folders.length > 0;
+  $<HTMLInputElement>("files-target").value = f.target;
+  $<HTMLInputElement>("files-recursive").checked = f.recursive;
+  $<HTMLInputElement>("files-skip").checked = f.skip_existing;
+  document.querySelectorAll<HTMLInputElement>('input[name="files-format"]').forEach((r) => {
+    r.checked = r.value === f.format;
+  });
+  $("files-format-note").textContent = FORMAT_NOTES[f.format];
+  const gpu = settings.gpu ? "on the graphics card when there is one" : "on the CPU";
+  $("files-engine").textContent =
+    `Uses the local model ${settings.local_model} (${gpu}) with your language and dictionary; ` +
+    "change them under Engine and Language & words.";
+}
+
+let filesRunning = false;
+let filesTarget = "";
+
+function renderFilesStatus(s: FilesStatus) {
+  filesRunning = s.running;
+  filesTarget = s.target;
+  $("files-start").hidden = s.running;
+  $("files-stop").hidden = !s.running;
+  $<HTMLButtonElement>("files-stop").disabled = s.stopping;
+  $("files-open").hidden = s.running || !s.target;
+  document
+    .querySelectorAll<HTMLButtonElement | HTMLInputElement>("#tab-files .card button, #tab-files .card input")
+    .forEach((el) => (el.disabled = s.running));
+  $("files-progress").hidden = s.total === 0;
+  const bar = $<HTMLProgressElement>("files-bar");
+  bar.max = Math.max(1, s.total);
+  bar.value = s.done + (s.running ? s.percent / 100 : 0);
+  let line: string;
+  if (s.stopping) {
+    line = "Stopping…";
+  } else if (s.running) {
+    line = `${s.done + 1} of ${s.total}: ${s.current || "…"} (${s.percent}%)`;
+    if (s.eta_secs != null) line += ` · about ${seconds(s.eta_secs)} left`;
+  } else {
+    line = `${s.ok} transcribed, ${s.failed} failed, ${s.skipped} skipped`;
+  }
+  $("files-status").textContent = line;
+  $("files-log").replaceChildren(
+    ...s.log
+      .slice()
+      .reverse()
+      .map((l) => {
+        const li = document.createElement("li");
+        li.textContent = l.text;
+        li.classList.toggle("bad", !l.ok);
+        return li;
+      }),
+  );
+}
+
+async function initFiles() {
+  const f = () => settings.files;
+  $("files-add").addEventListener("click", async () => {
+    const folder = await invoke<string | null>("pick_folder", { title: "Folder with recordings" });
+    if (folder && !f().folders.includes(folder)) {
+      f().folders.push(folder);
+      renderFileSettings();
+      save();
+    }
+  });
+  $("files-target-pick").addEventListener("click", async () => {
+    const folder = await invoke<string | null>("pick_folder", { title: "Save transcripts in" });
+    if (folder) {
+      f().target = folder;
+      renderFileSettings();
+      save();
+    }
+  });
+  $<HTMLInputElement>("files-recursive").addEventListener("change", (e) => {
+    f().recursive = (e.target as HTMLInputElement).checked;
+    save();
+  });
+  $<HTMLInputElement>("files-skip").addEventListener("change", (e) => {
+    f().skip_existing = (e.target as HTMLInputElement).checked;
+    save();
+  });
+  document.querySelectorAll<HTMLInputElement>('input[name="files-format"]').forEach((r) =>
+    r.addEventListener("change", () => {
+      f().format = r.value as FileFormat;
+      renderFileSettings();
+      save();
+    }),
+  );
+  $("files-start").addEventListener("click", async () => {
+    try {
+      // The batch reads the saved settings, so save now rather than in 500 ms.
+      clearTimeout(saveTimer);
+      taken = await invoke<string[]>("save_settings", { settings });
+      await invoke("start_files");
+    } catch (e) {
+      toast(String(e), true);
+    }
+  });
+  $("files-stop").addEventListener("click", () => invoke("stop_files"));
+  $("files-open").addEventListener("click", () =>
+    invoke("open_folder", { path: filesTarget || f().target }).catch((e) => toast(String(e), true)),
+  );
+  // The model, GPU switch and settings can change on other tabs.
+  document.querySelector<HTMLButtonElement>('.nav[data-tab="files"]')!.addEventListener("click", renderFileSettings);
+
+  renderFilesStatus(await invoke<FilesStatus>("files_status"));
+  renderFileSettings();
+  await listen<FilesStatus>("files-progress", (e) => renderFilesStatus(e.payload));
+}
+
 async function init() {
   settings = await invoke<Settings>("get_settings");
   taken = await invoke<string[]>("taken_hotkeys");
@@ -943,6 +1114,7 @@ async function init() {
     renderAppModes();
   });
   await initNotes();
+  await initFiles();
   await listen<Settings>("settings-changed", (e) => {
     settings = e.payload;
     $<HTMLSelectElement>("language").value = settings.language;

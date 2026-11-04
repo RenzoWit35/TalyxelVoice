@@ -47,9 +47,9 @@ impl LocalWhisper {
         self.use_gpu.store(on, Ordering::Relaxed);
     }
 
-    pub fn transcribe(&self, model: &Path, req: &Request) -> anyhow::Result<Transcript> {
+    /// Loads `model` into `guard` unless it's already there on the right device.
+    fn ensure_loaded(&self, guard: &mut Option<(PathBuf, bool, WhisperState)>, model: &Path) -> anyhow::Result<()> {
         let gpu = crate::gpu::pick().filter(|_| self.use_gpu.load(Ordering::Relaxed));
-        let mut guard = self.loaded.lock().unwrap();
         if guard.as_ref().map(|(p, g, _)| (p.as_path(), *g)) != Some((model, gpu.is_some())) {
             *guard = None;
             if !model.exists() {
@@ -70,22 +70,16 @@ impl LocalWhisper {
             let state = ctx.create_state().map_err(|e| anyhow!("{e}"))?;
             *guard = Some((model.to_owned(), gpu.is_some(), state));
         }
+        Ok(())
+    }
+
+    pub fn transcribe(&self, model: &Path, req: &Request) -> anyhow::Result<Transcript> {
+        let mut guard = self.loaded.lock().unwrap();
+        self.ensure_loaded(&mut guard, model)?;
         let (_, _, state) = guard.as_mut().unwrap();
 
-        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-        params.set_language(Some(req.language.as_deref().unwrap_or("auto")));
-        if !req.prompt.is_empty() {
-            params.set_initial_prompt(&req.prompt);
-        }
-        params.set_n_threads(default_threads() as i32);
-        params.set_translate(false);
-        params.set_no_context(true);
+        let mut params = base_params(req);
         params.set_no_timestamps(true);
-        params.set_suppress_blank(true);
-        params.set_print_special(false);
-        params.set_print_progress(false);
-        params.set_print_realtime(false);
-        params.set_print_timestamps(false);
 
         // whisper.cpp refuses input under one second.
         let min = WHISPER_RATE as usize + WHISPER_RATE as usize / 10;
@@ -106,6 +100,53 @@ impl LocalWhisper {
         Ok(Transcript { text: clean(&text), language })
     }
 
+    /// A whole recording, minutes or hours long, with a time range per
+    /// segment. `progress` gets whisper's percentage; returning true from
+    /// `abort` stops it mid-file.
+    pub fn transcribe_file(
+        &self,
+        model: &Path,
+        req: &Request,
+        progress: impl FnMut(i32) + 'static,
+        abort: impl FnMut() -> bool + 'static,
+    ) -> anyhow::Result<(Vec<Segment>, Option<String>)> {
+        let mut guard = self.loaded.lock().unwrap();
+        self.ensure_loaded(&mut guard, model)?;
+        let (_, _, state) = guard.as_mut().unwrap();
+
+        // Unlike dictation, the encoder keeps its full 30 s window (no
+        // `set_audio_ctx`): recordings are long, and timestamps need it.
+        let mut params = base_params(req);
+        params.set_progress_callback_safe(progress);
+        // whisper-rs 0.16 boxes this closure as `Box<dyn FnMut>` but its
+        // trampoline reads it back as `F`; only `F = Box<dyn FnMut>` matches.
+        params.set_abort_callback_safe(Box::new(abort) as Box<dyn FnMut() -> bool>);
+        let min = WHISPER_RATE as usize + WHISPER_RATE as usize / 10;
+        let mut samples = req.samples.clone();
+        if samples.len() < min {
+            samples.resize(min, 0.0);
+        }
+        state.full(params, &samples).map_err(|e| anyhow!("whisper failed: {e}"))?;
+
+        let mut segments = Vec::new();
+        for segment in state.as_iter() {
+            let text = clean(&segment.to_str_lossy().map_err(|e| anyhow!("{e}"))?);
+            if text.is_empty() {
+                continue;
+            }
+            // whisper counts in centiseconds.
+            segments.push(Segment {
+                start_ms: segment.start_timestamp().max(0) as u64 * 10,
+                end_ms: segment.end_timestamp().max(0) as u64 * 10,
+                text,
+            });
+        }
+        let language = req.language.clone().or_else(|| {
+            whisper_rs::get_lang_str(state.full_lang_id_from_state()).map(str::to_owned)
+        });
+        Ok((segments, language))
+    }
+
     /// Loads the model and runs it once on silence so the first real
     /// dictation doesn't pay for allocation and cache warm-up.
     pub fn warm_up(&self, model: &Path) {
@@ -123,6 +164,31 @@ impl LocalWhisper {
             Err(e) => log::warn!("whisper warm-up failed: {e}"),
         }
     }
+}
+
+/// One stretch of a recording as whisper split it, roughly a sentence.
+#[derive(Debug, Clone)]
+pub struct Segment {
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub text: String,
+}
+
+fn base_params(req: &Request) -> FullParams<'_, '_> {
+    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+    params.set_language(Some(req.language.as_deref().unwrap_or("auto")));
+    if !req.prompt.is_empty() {
+        params.set_initial_prompt(&req.prompt);
+    }
+    params.set_n_threads(default_threads() as i32);
+    params.set_translate(false);
+    params.set_no_context(true);
+    params.set_suppress_blank(true);
+    params.set_print_special(false);
+    params.set_print_progress(false);
+    params.set_print_realtime(false);
+    params.set_print_timestamps(false);
+    params
 }
 
 /// The encoder always runs over a 30 s window (1500 frames, 50 per second)
