@@ -3,11 +3,15 @@
 # `npm run release -- 0.2.0`, then `git push --follow-tags`.
 # Pull requests (and manual runs off a branch) build the same installer
 # without publishing; it's attached to the run as an artifact to try out.
+# Pushes to main build too, only to save the Rust cache: GitHub scopes caches
+# to the ref that made them, and a tag or PR can read main's but not another
+# tag's, so without these every release compiled all its crates from scratch.
 name: Release
 
 on:
   push:
     tags: ["v*"]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -39,6 +43,9 @@ jobs:
         with:
           # The target is relative to src-tauri: D:\t, as CARGO_TARGET_DIR.
           workspaces: src-tauri -> ../../../../t
+          # Only main's cache is readable by later tags and PRs; saving one
+          # anywhere else spends ~30 s and 600 MB of the 10 GB cache quota.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # whisper.cpp must build with the Ninja generator (see .cargo/config.toml).
       - name: Install Ninja
