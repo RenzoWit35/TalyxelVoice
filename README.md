@@ -25,6 +25,7 @@ Hold the hotkey, talk, let go: the text is pasted wherever your cursor is.
 | Engines | `src-tauri/src/stt.rs` | `LocalWhisper` keeps the model + decoder state warm; the remote engine speaks the OpenAI transcription API. |
 | OS glue | `src-tauri/src/platform.rs` | Focused-app detection, paste via `SendInput`, overlay that never steals focus. |
 | History | `src-tauri/src/history.rs` | Raw and pasted text per dictation, in `history.json`, pruned by age. |
+| Files | `src-tauri/src/files.rs` | Folders of Ogg Opus recordings to one `.md`, `.txt` or `.srt` each, on a whisper instance of its own. |
 | Settings UI | `index.html`, `src/main.ts` | Engine, models, server, language and dictionary, snippets, per-app modes, hotkeys, microphone. |
 | Overlay pill | `pill.html`, `src/pill.ts` | Live level meter / "Transcribing" / errors, bottom-center above the taskbar. |
 
@@ -134,6 +135,26 @@ note routes every dictation (and summary) into that note instead of pasting it, 
 off; **To note** on a history entry adds that dictation afterwards. Notes can be pinned, searched,
 copied, and rewritten in place with any transform (polish, list, shorter, friendlier, formal,
 translate, prompt engineer) with one-step undo. They live in `notes.json` next to the settings.
+
+## Files
+
+The Files tab transcribes folders of recordings in one go, on this device: WhatsApp voice notes and
+any other `.opus` / `.ogg` (Ogg Opus) file. Add one or more source folders, pick where the
+transcripts go and the format, press **Start**.
+
+- **One transcript per recording**, under `<save to>\<source folder name>\`, with subfolders mirrored
+  when **Include subfolders** is on. Two source folders with the same name get `Name (2)`.
+- **Formats**: `.md` (heading, date, length and language, then the text in paragraphs; a pause of 2 s
+  starts a new one), `.txt` (just the text) or `.srt` (one cue per whisper segment).
+- **Engine**: always the local model picked under Engine, on the graphics card when that's on, with
+  your language, dictionary and filler removal (none when Cleanup is *As spoken*). No text model.
+  The batch loads its own copy of the model, so dictation keeps working while it runs.
+- **Skip recordings that already have a transcript** (on by default) makes a stopped or interrupted
+  batch resumable: press Start again. Transcripts are written to a `.part` file and renamed, so a
+  half-written one never counts as done. **Stop** aborts within a second, mid-recording too.
+
+Opus is decoded by libopus (the `opus` crate builds it from source with CMake) straight to 16 kHz
+mono, so there's no resampling step. Ogg Vorbis and other codecs are reported as unsupported.
 
 ## History
 

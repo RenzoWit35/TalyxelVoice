@@ -13,6 +13,7 @@
         <div class="brand"><span class="brand-dot"></span>TalyxelVoice</div>
         <button class="nav active" data-tab="home">Dictation</button>
         <button class="nav" data-tab="notes">Notes</button>
+        <button class="nav" data-tab="files">Files</button>
         <button class="nav" data-tab="engine">Engine</button>
         <button class="nav" data-tab="cleanup">Cleanup &amp; summary</button>
         <button class="nav" data-tab="language">Language &amp; words</button>
@@ -93,6 +94,55 @@
             </div>
             <p id="note-none" class="empty">Pick a note, or start a new one.</p>
           </div>
+        </section>
+
+        <section class="tab" id="tab-files">
+          <header>
+            <h1>Files</h1>
+            <p class="muted">
+              Transcribe folders of recordings, such as WhatsApp voice notes, on this device. Each
+              <code>.opus</code> or <code>.ogg</code> file gets its own transcript.
+            </p>
+          </header>
+
+          <div class="card">
+            <h2>Recordings</h2>
+            <ul id="files-folders" class="folders"></ul>
+            <p id="files-folders-empty" class="muted small">No folders yet.</p>
+            <div class="row" style="margin-top: 10px">
+              <button id="files-add" class="btn">Add folder…</button>
+              <label class="check" style="margin: 0"><input id="files-recursive" type="checkbox" /> Include subfolders</label>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>Save to</h2>
+            <div class="row folder-pick">
+              <input id="files-target" readonly placeholder="Choose a folder" />
+              <button id="files-target-pick" class="btn">Choose…</button>
+            </div>
+            <p class="muted small hint">Each source folder gets a subfolder here with the same name.</p>
+            <label class="field">Format</label>
+            <div class="segmented" role="radiogroup">
+              <label><input type="radio" name="files-format" value="md" /> <span>.md</span></label>
+              <label><input type="radio" name="files-format" value="txt" /> <span>.txt</span></label>
+              <label><input type="radio" name="files-format" value="srt" /> <span>.srt</span></label>
+            </div>
+            <p id="files-format-note" class="muted small hint"></p>
+            <label class="check"><input id="files-skip" type="checkbox" /> Skip recordings that already have a transcript</label>
+          </div>
+
+          <p id="files-engine" class="muted small hint"></p>
+          <div class="row" style="margin-top: 14px">
+            <button id="files-start" class="btn primary">Start</button>
+            <button id="files-stop" class="btn" hidden>Stop</button>
+            <button id="files-open" class="btn ghost" hidden>Open folder</button>
+          </div>
+          <div id="files-progress" class="files-progress" hidden>
+            <progress id="files-bar" max="1" value="0"></progress>
+            <p id="files-status" class="muted small"></p>
+          </div>
+          <ul id="files-log" class="files-log"></ul>
         </section>
 
         <section class="tab" id="tab-engine">

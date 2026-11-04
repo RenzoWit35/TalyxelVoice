@@ -1,4 +1,5 @@
 mod audio;
+mod files;
 mod gpu;
 mod history;
 mod notes;
@@ -407,6 +408,50 @@ fn show_main(app: &AppHandle) {
     }
 }
 
+/// Windows' folder picker; `None` when cancelled.
+#[tauri::command]
+async fn pick_folder(app: AppHandle, title: String) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut dialog = app.dialog().file().set_title(title);
+        if let Some(main) = app.get_webview_window("main") {
+            dialog = dialog.set_parent(&main);
+        }
+        dialog.blocking_pick_folder()
+    })
+    .await
+    .ok()
+    .flatten()
+    .and_then(|p| p.into_path().ok())
+    .map(|p| p.display().to_string())
+}
+
+/// Starts transcribing the folders in `settings.files` (saved first by the page).
+#[tauri::command]
+fn start_files(app: AppHandle, state: State<AppState>, batch: State<Arc<files::Batch>>) -> CmdResult<()> {
+    let settings = state.settings.lock().unwrap().clone();
+    files::start(app.clone(), batch.inner().clone(), settings, state.models_dir.clone()).map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+fn stop_files(app: AppHandle, batch: State<Arc<files::Batch>>) {
+    batch.request_stop(&app);
+}
+
+#[tauri::command]
+fn files_status(batch: State<Arc<files::Batch>>) -> files::Status {
+    batch.status()
+}
+
+#[tauri::command]
+fn open_folder(path: String) -> CmdResult<()> {
+    let path = PathBuf::from(path);
+    if !path.is_dir() {
+        return Err(format!("{} doesn't exist yet", path.display()));
+    }
+    std::process::Command::new("explorer").arg(&path).spawn().map(|_| ()).map_err(err)
+}
+
 /// The graphics card the models run on when `gpu` is on; `None` means the CPU.
 #[tauri::command]
 async fn gpu_name() -> Option<String> {
@@ -475,7 +520,9 @@ pub fn run() {
         )
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--hidden"])))
+        .plugin(tauri_plugin_dialog::init())
         .manage(updates::Updates::default())
+        .manage(Arc::new(files::Batch::default()))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
@@ -622,6 +669,11 @@ pub fn run() {
             get_update_status,
             check_for_updates,
             install_update,
+            pick_folder,
+            start_files,
+            stop_files,
+            files_status,
+            open_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running TalyxelVoice");
