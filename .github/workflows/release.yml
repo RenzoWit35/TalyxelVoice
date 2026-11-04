@@ -12,8 +12,17 @@ on:
   push:
     tags: ["v*"]
     branches: [main]
+    # GitHub doesn't apply path filters to tag pushes, so releases always build.
+    paths-ignore: ["**.md", ".vscode/**"]
   pull_request:
+    paths-ignore: ["**.md", ".vscode/**"]
   workflow_dispatch:
+
+# A new push to a PR cancels the run still building its previous commit.
+# Runs on main (they save the cache) and on tags (they publish) always finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: write
