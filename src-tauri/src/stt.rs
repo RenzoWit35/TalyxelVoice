@@ -36,10 +36,33 @@ impl Request {
 /// several times slower than later ones.
 #[derive(Default)]
 pub struct LocalWhisper {
-    /// The model, whether it's on the GPU, and its state.
-    loaded: Mutex<Option<(PathBuf, bool, WhisperState)>>,
+    loaded: Mutex<Option<Loaded>>,
     /// Settings' `gpu`; a change reloads the model on the next dictation.
     use_gpu: AtomicBool,
+}
+
+struct Loaded {
+    model: PathBuf,
+    gpu: bool,
+    ctx: WhisperContext,
+    /// Only ever runs with an `audio_ctx` that's a multiple of 256 frames.
+    short: Option<WhisperState>,
+    /// Only ever runs over whisper's full 30 s window. A state never mixes
+    /// the two: their padded layouts overlap, so one would read the other's
+    /// leftovers (see `audio_ctx`).
+    full: Option<WhisperState>,
+}
+
+impl Loaded {
+    /// The state for clips run at `audio_ctx` (`None`: the full window),
+    /// created on first use.
+    fn state(&mut self, audio_ctx: Option<i32>) -> anyhow::Result<&mut WhisperState> {
+        let slot = if audio_ctx.is_some() { &mut self.short } else { &mut self.full };
+        if slot.is_none() {
+            *slot = Some(self.ctx.create_state().map_err(|e| anyhow!("{e}"))?);
+        }
+        Ok(slot.as_mut().unwrap())
+    }
 }
 
 impl LocalWhisper {
@@ -48,9 +71,9 @@ impl LocalWhisper {
     }
 
     /// Loads `model` into `guard` unless it's already there on the right device.
-    fn ensure_loaded(&self, guard: &mut Option<(PathBuf, bool, WhisperState)>, model: &Path) -> anyhow::Result<()> {
+    fn ensure_loaded<'a>(&self, guard: &'a mut Option<Loaded>, model: &Path) -> anyhow::Result<&'a mut Loaded> {
         let gpu = crate::gpu::pick().filter(|_| self.use_gpu.load(Ordering::Relaxed));
-        if guard.as_ref().map(|(p, g, _)| (p.as_path(), *g)) != Some((model, gpu.is_some())) {
+        if guard.as_ref().map(|l| (l.model.as_path(), l.gpu)) != Some((model, gpu.is_some())) {
             *guard = None;
             if !model.exists() {
                 bail!("model {} isn't downloaded yet — get it in Settings", model.display());
@@ -66,17 +89,14 @@ impl LocalWhisper {
                 ctx_params,
             )
             .map_err(|e| anyhow!("failed to load model: {e}"))?;
-            // The state keeps the context alive.
-            let state = ctx.create_state().map_err(|e| anyhow!("{e}"))?;
-            *guard = Some((model.to_owned(), gpu.is_some(), state));
+            *guard = Some(Loaded { model: model.to_owned(), gpu: gpu.is_some(), ctx, short: None, full: None });
         }
-        Ok(())
+        Ok(guard.as_mut().unwrap())
     }
 
     pub fn transcribe(&self, model: &Path, req: &Request) -> anyhow::Result<Transcript> {
         let mut guard = self.loaded.lock().unwrap();
-        self.ensure_loaded(&mut guard, model)?;
-        let (_, _, state) = guard.as_mut().unwrap();
+        let loaded = self.ensure_loaded(&mut guard, model)?;
 
         let mut params = base_params(req);
         params.set_no_timestamps(true);
@@ -87,7 +107,11 @@ impl LocalWhisper {
         if samples.len() < min {
             samples.resize(min, 0.0);
         }
-        params.set_audio_ctx(audio_ctx(samples.len()));
+        let ctx = audio_ctx(samples.len());
+        if let Some(ctx) = ctx {
+            params.set_audio_ctx(ctx);
+        }
+        let state = loaded.state(ctx)?;
         state.full(params, &samples).map_err(|e| anyhow!("whisper failed: {e}"))?;
 
         let mut text = String::new();
@@ -111,8 +135,7 @@ impl LocalWhisper {
         abort: impl FnMut() -> bool + 'static,
     ) -> anyhow::Result<(Vec<Segment>, Option<String>)> {
         let mut guard = self.loaded.lock().unwrap();
-        self.ensure_loaded(&mut guard, model)?;
-        let (_, _, state) = guard.as_mut().unwrap();
+        let state = self.ensure_loaded(&mut guard, model)?.state(None)?;
 
         // Unlike dictation, the encoder keeps its full 30 s window (no
         // `set_audio_ctx`): recordings are long, and timestamps need it.
@@ -194,10 +217,18 @@ fn base_params(req: &Request) -> FullParams<'_, '_> {
 /// The encoder always runs over a 30 s window (1500 frames, 50 per second)
 /// unless told otherwise; dictations are a few seconds, so size it to the
 /// clip plus a second of slack. This is most of the local speed.
-fn audio_ctx(samples: usize) -> i32 {
+///
+/// Always a multiple of 256: with flash attention, whisper.cpp pads the
+/// encoder's and the decoder's attention to 256 frames and doesn't mask the
+/// padding, so any other size reads frames left over from an earlier, longer
+/// clip and tends to write that clip out again, or this one twice. `None`
+/// past 1280 frames: the full window (1500) isn't a multiple of 256, so those
+/// clips go to a state of their own.
+fn audio_ctx(samples: usize) -> Option<i32> {
     let secs = samples as f32 / WHISPER_RATE as f32;
     let frames = (secs * 50.0) as i32 + 50;
-    (((frames + 63) / 64) * 64).min(1500)
+    let ctx = ((frames + 255) / 256) * 256;
+    (ctx <= 1280).then_some(ctx)
 }
 
 /// All but two logical cores: measurably faster than 8 on hybrid Intel parts,
@@ -310,6 +341,23 @@ mod tests {
             transcriptions_url("https://h/v1/audio/transcriptions"),
             "https://h/v1/audio/transcriptions"
         );
+    }
+
+    #[test]
+    fn audio_ctx_is_whole_attention_blocks() {
+        let secs = |s: f32| (s * WHISPER_RATE as f32) as usize;
+        assert_eq!(audio_ctx(secs(1.1)), Some(256));
+        assert_eq!(audio_ctx(secs(4.0)), Some(256));
+        assert_eq!(audio_ctx(secs(4.2)), Some(512));
+        assert_eq!(audio_ctx(secs(24.0)), Some(1280));
+        assert_eq!(audio_ctx(secs(25.0)), None);
+        for tenths in 0..300 {
+            if let Some(ctx) = audio_ctx(secs(tenths as f32 / 10.0)) {
+                assert_eq!(ctx % 256, 0);
+                // Room for the clip plus the second of slack.
+                assert!(ctx >= (tenths * 5 + 50) as i32);
+            }
+        }
     }
 
     #[test]
