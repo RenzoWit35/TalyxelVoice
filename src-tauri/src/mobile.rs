@@ -84,12 +84,12 @@ pub(crate) async fn transcribe(app: AppHandle, request: tauri::ipc::Request<'_>)
     if busy.0.swap(true, Ordering::SeqCst) {
         return Err("Still working on the previous recording".into());
     }
-    let result = run(&app, pcm, rate, summary).await;
+    let result = dictate(&app, pcm, rate, summary).await;
     busy.0.store(false, Ordering::SeqCst);
     result.map_err(|e| format!("{e:#}"))
 }
 
-async fn run(app: &AppHandle, pcm: Vec<f32>, rate: u32, summary: bool) -> anyhow::Result<Dictated> {
+async fn dictate(app: &AppHandle, pcm: Vec<f32>, rate: u32, summary: bool) -> anyhow::Result<Dictated> {
     let samples = tauri::async_runtime::spawn_blocking(move || audio::resample(&pcm, rate, WHISPER_RATE)).await?;
     let secs = samples.len() as f32 / WHISPER_RATE as f32;
     let peak = samples.iter().fold(0.0f32, |m, s| m.max(s.abs()));
@@ -181,8 +181,8 @@ pub fn run() {
             });
             // Built here, not from the config, so the page's first invoke
             // can't run before AppState is managed.
-            if let Some(main) = app.config().app.windows.iter().find(|w| w.label == "main") {
-                WebviewWindowBuilder::from_config(app, main)?.build()?;
+            if let Some(main) = app.config().app.windows.iter().find(|w| w.label == "main").cloned() {
+                WebviewWindowBuilder::from_config(app, &main)?.build()?;
             }
             crate::warm_up(app.handle());
             Ok(())
