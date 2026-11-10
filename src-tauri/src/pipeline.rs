@@ -236,50 +236,10 @@ async fn run(
 
     let summary = kind == Kind::Summary;
     let (polish, format_style) = settings.mode_for(&focused.exe);
-    // Dictionary fixes and spoken punctuation are the user's own rules, so
-    // they apply even to "as spoken".
-    let mut text = polish::replace_words(&raw, &settings.replacements());
-    if settings.spoken_punctuation {
-        text = polish::spoken_punctuation(&text);
-    }
-    if polish != Polish::Off || summary {
-        text = polish::strip_fillers(&text, language);
-    }
-    let snippet = if summary { None } else { polish::apply_snippet(&text, &settings.snippets) };
-    let (task, mut mode) = match snippet {
-        Some(expanded) => {
-            text = expanded;
-            (None, "snippet".to_owned())
-        }
-        None if summary => (Some(Task::Summarize), "summary".to_owned()),
-        None => match polish {
-            Polish::Off => (None, "as spoken".to_owned()),
-            Polish::Clean => (None, "clean".to_owned()),
-            Polish::Medium => (Some(Task::Cleanup), "medium".to_owned()),
-            Polish::Format => (
-                Some(Task::Format(format_style)),
-                format!("format · {}", format!("{format_style:?}").to_lowercase()),
-            ),
-        },
-    };
-    let mut warning = None;
-    if let Some(task) = task {
-        pill(app, Pill::Polishing { summary: task == Task::Summarize });
-        let cfg = &settings.text_model;
-        match polish::apply(cfg, &state.text_model, &state.models_dir, &task, &text, language).await {
-            Ok(polished) => text = polished,
-            Err(e) => {
-                log::warn!("{task:?} failed: {e:#}");
-                let what = match task {
-                    Task::Summarize => "summarize",
-                    Task::Cleanup => "clean up",
-                    _ => "format",
-                };
-                warning = Some(anyhow::anyhow!("Couldn't {what} ({e}); pasted the plain text"));
-                mode = "clean (model failed)".to_owned();
-            }
-        }
-    }
+    let on_model = |task: &Task| pill(app, Pill::Polishing { summary: *task == Task::Summarize });
+    let shaped = polish::shape(&settings, &state.text_model, &state.models_dir, &raw, language, summary, polish, format_style, on_model).await;
+    let (text, mut mode) = (shaped.text, shaped.mode);
+    let warning = shaped.warning.map(|w| anyhow::anyhow!("{w}; pasted the plain text"));
     let latency_ms = started.elapsed().as_millis() as u64;
 
     // Into the open note instead of the focused app, when the user asked for that.

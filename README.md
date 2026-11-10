@@ -167,6 +167,34 @@ default; both are under General, next to a Clear button and **Start with Windows
 The tray icon's menu opens the settings, checks for updates, and has a **Language** submenu to
 switch whisper's language for the next dictation without opening the window.
 
+## Android (tablets and phones)
+
+The same app runs on Android, as a place to dictate rather than a system-wide hotkey: Android
+doesn't let an app type into other apps without being a keyboard, so you talk, the text lands in a
+draft or a note, and **Copy** puts it on the clipboard for any app.
+
+- **Dictate** tab: tap the microphone, talk, tap again. Text or a summary, inserted at the cursor;
+  **Rewrite** runs the transforms (polish, list, shorter, ...) on the draft.
+- **Notes** and **History**, in the same formats as on Windows.
+- **Engine**: whisper on the tablet's CPU (`base` is the quick one, `small-q5_1` the accurate one),
+  or your own server. Cleanup rules, the dictionary, spoken punctuation and snippets work the same.
+  The text model (Medium, Format, summaries, rewrites) is always "my server": there's no bundled
+  llama-server on Android.
+
+Install: download `TalyxelVoice_<version>_android-arm64.apk` from the
+[latest release](https://github.com/RenzoWit35/TalyxelVoice/releases/latest) on the tablet and open
+it (allow installing from your browser when asked). It doesn't update itself; install a newer APK
+over it. arm64 only, Android 8 or newer.
+
+How it's built (`src-tauri/src/mobile.rs`, `mobile.html`, `src/mobile.ts`): the page records the
+microphone with Web Audio at 16 kHz and sends the PCM to Rust, which runs the shared
+`stt` + `polish::shape` steps. Desktop-only code (hotkeys, tray, paste, updater, Files) is behind
+`#[cfg(desktop)]` and desktop-only crates. `.github/workflows/android.yml` generates the Android
+project with `tauri android init`, patches in the microphone permission and `MainActivity.kt`,
+builds one ABI, and signs with the keystore in the `ANDROID_KEYSTORE_BASE64` /
+`ANDROID_KEYSTORE_PASSWORD` secrets (without them, with a throwaway key: that APK can't update one
+signed with the real key). **Back up the keystore** like the updater key.
+
 ## Using your own server
 
 Pick **My server** in the Engine tab. Anything that implements OpenAI's
@@ -238,7 +266,7 @@ http feed).
 
 See [ROADMAP.md](ROADMAP.md). Shipped so far: core dictation, cleanup levels and summaries, undo
 and history, snippets and spoken punctuation, per-app modes, transforms and commands on selected
-text, Vulkan GPU acceleration. Still open: a modifier-only hotkey (hold Right-Ctrl) via a low-level
+text, Vulkan GPU acceleration. Also on Android (see above). Still open: a modifier-only hotkey (hold Right-Ctrl) via a low-level
 keyboard hook, streaming partial results, macOS.
 
 ## Third-party

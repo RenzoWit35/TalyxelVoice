@@ -20,23 +20,28 @@ crate-type = ["rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tauri-plugin-global-shortcut = "2.4.1"
-cpal = "0.18.2"
-whisper-rs = { version = "0.16.0", features = ["vulkan"] }
+whisper-rs = "0.16.0"
 # The same crate whisper-rs builds; gpu.rs asks its ggml for the devices.
 whisper-rs-sys = "0.15"
 hound = "3.5.1"
-arboard = "3.7.0"
 anyhow = "1.0.104"
 log = "0.4.35"
 futures-util = "0.3.34"
 tokio = { version = "1.54.1", features = ["time"] }
-windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_LibraryLoader"] }
 reqwest = { version = "0.13", default-features = false, features = ["multipart", "json", "rustls", "stream"] }
 tauri-plugin-log = "2.10.1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+# Desktop only: hotkeys, the tray, pasting into other apps, updates, the Files tab.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+whisper-rs = { version = "0.16.0", features = ["vulkan"] }
+tauri-plugin-global-shortcut = "2.4.1"
+cpal = "0.18.2"
+arboard = "3.7.0"
 tauri-plugin-updater = "2.14.1"
 tauri-plugin-autostart = "2"
 # Folder picker for the Files tab, called from Rust only.
@@ -44,20 +49,11 @@ tauri-plugin-dialog = "2"
 # Files tab: Ogg demuxing, and libopus (built from source with cmake, like whisper).
 ogg = "0.9"
 opus = "0.4"
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_LibraryLoader"] }
 
-# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
-[profile.release]
-# Thin LTO with parallel codegen: fat LTO on one codegen unit made the final
-# link take ~5 min on CI. The hot paths (whisper.cpp, llama) are C++ built by
-# CMake and unaffected; the Rust side is glue, so the difference is a few
-# hundred KB of binary, not speed.
-lto = "thin"
-opt-level = 3
-panic = "abort"
-strip = true
-
-# whisper.cpp is unusably slow unoptimized; keep it fast in `tauri dev` too.
-[profile.dev.package.whisper-rs-sys]
-opt-level = 3
+# Android: the page records the microphone (getUserMedia), whisper runs on the
+# CPU, and HTTPS is checked against Mozilla's roots (see net.rs).
+[target.'cfg(target_os = "android")'.dependencies]
+webpki-root-certs = "1"

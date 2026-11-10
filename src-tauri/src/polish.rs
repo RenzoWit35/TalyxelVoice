@@ -407,7 +407,7 @@ impl LocalTextModel {
 
         let started = Instant::now();
         let health = format!("http://127.0.0.1:{port}/health");
-        let client = reqwest::Client::new();
+        let client = crate::net::client();
         loop {
             if let Some(status) = server.child.try_wait()? {
                 bail!("llama-server exited while loading the model ({status})");
@@ -493,7 +493,7 @@ async fn chat(
         // first. Hosted APIs may reject unknown fields, so not for those.
         body["chat_template_kwargs"] = serde_json::json!({ "enable_thinking": false });
     }
-    let mut request = reqwest::Client::new().post(chat_url(url)).timeout(timeout).json(&body);
+    let mut request = crate::net::client().post(chat_url(url)).timeout(timeout).json(&body);
     if let Some(key) = cfg.map(|c| c.api_key.as_str()).filter(|k| !k.is_empty()) {
         request = request.bearer_auth(key);
     }
@@ -908,6 +908,77 @@ fn plausible(task: &Task, input: &str, output: &str) -> bool {
         // "Expand this" is a legitimate command, so allow growth, within reason.
         Task::Command(_) => out > 0 && out <= inp * 4 + 400,
     }
+}
+
+/// A dictation after transcription, ready to paste.
+pub struct Shaped {
+    pub text: String,
+    /// How it was shaped, for the history ("clean", "format · list", ...).
+    pub mode: String,
+    /// Set when the text model failed and the cleaned-up text is all there is.
+    pub warning: Option<String>,
+}
+
+/// Dictionary fixes, spoken punctuation, filler removal, snippets, then the
+/// text model when `polish` (or `summary`) asks for one. `on_model` runs
+/// just before the model starts, so the caller can say it's working.
+#[allow(clippy::too_many_arguments)]
+pub async fn shape(
+    settings: &crate::settings::Settings,
+    local: &LocalTextModel,
+    models_dir: &Path,
+    raw: &str,
+    language: Option<&str>,
+    summary: bool,
+    polish: crate::settings::Polish,
+    format_style: FormatStyle,
+    on_model: impl FnOnce(&Task),
+) -> Shaped {
+    use crate::settings::Polish;
+    // Dictionary fixes and spoken punctuation are the user's own rules, so
+    // they apply even to "as spoken".
+    let mut text = replace_words(raw, &settings.replacements());
+    if settings.spoken_punctuation {
+        text = spoken_punctuation(&text);
+    }
+    if polish != Polish::Off || summary {
+        text = strip_fillers(&text, language);
+    }
+    let snippet = if summary { None } else { apply_snippet(&text, &settings.snippets) };
+    let (task, mut mode) = match snippet {
+        Some(expanded) => {
+            text = expanded;
+            (None, "snippet".to_owned())
+        }
+        None if summary => (Some(Task::Summarize), "summary".to_owned()),
+        None => match polish {
+            Polish::Off => (None, "as spoken".to_owned()),
+            Polish::Clean => (None, "clean".to_owned()),
+            Polish::Medium => (Some(Task::Cleanup), "medium".to_owned()),
+            Polish::Format => (
+                Some(Task::Format(format_style)),
+                format!("format · {}", format!("{format_style:?}").to_lowercase()),
+            ),
+        },
+    };
+    let mut warning = None;
+    if let Some(task) = task {
+        on_model(&task);
+        match apply(&settings.text_model, local, models_dir, &task, &text, language).await {
+            Ok(polished) => text = polished,
+            Err(e) => {
+                log::warn!("{task:?} failed: {e:#}");
+                let what = match task {
+                    Task::Summarize => "summarize",
+                    Task::Cleanup => "clean up",
+                    _ => "format",
+                };
+                warning = Some(format!("Couldn't {what} ({e})"));
+                mode = "clean (model failed)".to_owned();
+            }
+        }
+    }
+    Shaped { text, mode, warning }
 }
 
 /// Rewrites `text` as `task` asks. Errors leave it to the caller to fall

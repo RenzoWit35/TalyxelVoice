@@ -1,0 +1,134 @@
+# Builds the Android app (arm64 APK, for phones and tablets) next to the
+# Windows release. A v* tag attaches the signed APK to that version's GitHub
+# release; pull requests and pushes to main keep it as a run artifact.
+# Pushes to main also save the Rust cache, which tags and PRs can read (see
+# release.yml), so a release only recompiles what changed.
+#
+# Kept fast: one ABI (arm64-v8a, every tablet of the last years), whisper on
+# the CPU (no Vulkan shaders to compile), thin LTO, and cached crates and
+# Gradle downloads.
+name: Android
+
+on:
+  push:
+    tags: ["v*"]
+    branches: [main]
+    paths-ignore: ["**.md", ".vscode/**"]
+  pull_request:
+    paths-ignore: ["**.md", ".vscode/**"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    env:
+      # .cargo/config.toml points these at a Windows install; [env] doesn't
+      # override variables that are already set.
+      CMAKE: cmake
+      CMAKE_GENERATOR: Ninja
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Toolchain paths
+        run: |
+          command -v ninja || sudo apt-get install -y --no-install-recommends ninja-build
+          NDK="$ANDROID_NDK_HOME"
+          echo "NDK_HOME=$NDK" >> "$GITHUB_ENV"
+          # whisper-rs-sys generates its bindings with bindgen (host libclang,
+          # NDK headers); if that fails it falls back to its bundled ones.
+          echo "LIBCLANG_PATH=$(ls -d /usr/lib/llvm-*/lib | sort -V | tail -1)" >> "$GITHUB_ENV"
+          echo "BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android=--sysroot=$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot" >> "$GITHUB_ENV"
+          echo "CMAKE_TOOLCHAIN_FILE_aarch64_linux_android=$GITHUB_WORKSPACE/src-tauri/android/arm64.toolchain.cmake" >> "$GITHUB_ENV"
+
+      - run: npm ci
+
+      - name: Generate the Android project
+        run: |
+          # Android loads the app as a shared library; desktop builds skip
+          # that crate type to save a link (see Cargo.toml).
+          sed -i 's/^crate-type = \["rlib"\]/crate-type = ["cdylib", "rlib"]/' src-tauri/Cargo.toml
+          npx tauri android init --ci
+          npx tauri icon src-tauri/icons/icon.png
+          app=src-tauri/gen/android/app/src/main
+          sed -i 's#<uses-permission android:name="android.permission.INTERNET" />#&\n    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />#' "$app/AndroidManifest.xml"
+          grep -q RECORD_AUDIO "$app/AndroidManifest.xml"
+          cp src-tauri/android/MainActivity.kt "$app/java/com/talyxel/voice/MainActivity.kt"
+          # whisper.cpp links the NDK's shared C++ runtime; ship it with the app.
+          mkdir -p "$app/jniLibs/arm64-v8a"
+          cp "$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "$app/jniLibs/arm64-v8a/"
+
+      - name: Build
+        run: npx tauri android build --apk --target aarch64
+
+      - name: Sign
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          tools="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          unsigned=$(find src-tauri/gen/android/app/build/outputs/apk -name '*-release-unsigned.apk' | head -1)
+          if [ -n "$KEYSTORE" ]; then
+            echo "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/release.jks"
+          else
+            # Forks and PRs without the secret: a throwaway key, so the APK
+            # still installs (but can't update an install signed with the real one).
+            KEYSTORE_PASSWORD=throwaway
+            keytool -genkeypair -keystore "$RUNNER_TEMP/release.jks" -storepass "$KEYSTORE_PASSWORD" \
+              -alias talyxel -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=TalyxelVoice test"
+          fi
+          # 16 KB pages for the native libraries (Android 15+ devices may use them).
+          "$tools/zipalign" -P 16 -f 4 "$unsigned" "$RUNNER_TEMP/aligned.apk" ||             "$tools/zipalign" -p -f 4 "$unsigned" "$RUNNER_TEMP/aligned.apk"
+          mkdir -p out
+          "$tools/apksigner" sign --ks "$RUNNER_TEMP/release.jks" --ks-pass env:KEYSTORE_PASSWORD \
+            --out "out/TalyxelVoice_${version}_android-arm64.apk" "$RUNNER_TEMP/aligned.apk"
+          "$tools/apksigner" verify "out/TalyxelVoice_${version}_android-arm64.apk"
+          rm -f "$RUNNER_TEMP/release.jks"
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TalyxelVoice-android
+          path: out/*.apk
+
+      # The Windows job publishes the same release; whichever finishes first
+      # creates it, the other adds to it.
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          gh release view "$tag" >/dev/null 2>&1 || \
+            gh release create "$tag" --title "TalyxelVoice v$VERSION" \
+              --notes "Installs automatically from the app; see the commits for what changed." || true
+          gh release upload "$tag" out/*.apk --clobber
