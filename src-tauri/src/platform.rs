@@ -197,6 +197,7 @@ mod imp {
 
 pub use imp::*;
 
+#[cfg(desktop)]
 /// What the focused app has selected, read by simulating Ctrl+C. `None`
 /// when nothing was selected (the clipboard stayed empty). The user's
 /// clipboard text is put back afterwards.
@@ -222,6 +223,7 @@ pub fn copy_selection() -> anyhow::Result<Option<String>> {
     Ok(selection)
 }
 
+#[cfg(desktop)]
 /// Puts `text` into the focused app via the clipboard, then puts back
 /// whatever the user had copied.
 pub fn insert_text(text: &str, restore_clipboard: bool) -> anyhow::Result<()> {

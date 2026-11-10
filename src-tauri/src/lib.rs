@@ -1,29 +1,43 @@
 mod audio;
+#[cfg(desktop)]
 mod files;
 mod gpu;
 mod history;
+#[cfg(mobile)]
+mod mobile;
+mod net;
 mod notes;
+#[cfg(desktop)]
 mod pipeline;
 mod platform;
 mod polish;
 mod settings;
 mod stt;
+#[cfg(desktop)]
 mod updates;
 
+#[cfg(desktop)]
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt;
 use serde::Serialize;
+#[cfg(desktop)]
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, Submenu};
+#[cfg(desktop)]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, State, WebviewWindowBuilder, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, State};
+#[cfg(desktop)]
+use tauri::{PhysicalPosition, WebviewWindowBuilder, WindowEvent};
+#[cfg(desktop)]
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
+#[cfg(desktop)]
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 use history::{History, HistoryEntry};
 use notes::{Note, Notes};
+#[cfg(desktop)]
 use pipeline::{Dictation, Kind};
 use settings::{RemoteSettings, Settings, Transform};
 
@@ -33,17 +47,21 @@ pub struct AppState {
     models_dir: PathBuf,
     local: Arc<stt::LocalWhisper>,
     text_model: Arc<polish::LocalTextModel>,
+    #[cfg(desktop)]
     dictation: Mutex<Dictation>,
     history: Mutex<History>,
     /// Registered shortcut id → what it does.
+    #[cfg(desktop)]
     hotkeys: Mutex<HashMap<u32, Action>>,
     /// Configured hotkeys another app already holds.
+    #[cfg(desktop)]
     taken_hotkeys: Mutex<Vec<String>>,
     notes: Mutex<Notes>,
     /// While set, dictations are added to this note instead of pasted.
     capture: Mutex<Option<u64>>,
 }
 
+#[cfg(desktop)]
 /// What a global hotkey does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Action {
@@ -109,6 +127,7 @@ fn get_settings(state: State<AppState>) -> Settings {
     state.settings.lock().unwrap().clone()
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 fn save_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> CmdResult<Vec<String>> {
     let previous = state.settings.lock().unwrap().clone();
@@ -138,6 +157,7 @@ fn save_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> 
     Ok(taken)
 }
 
+#[cfg(desktop)]
 fn apply_autostart(app: &AppHandle, on: bool) -> CmdResult<()> {
     let launcher = app.autolaunch();
     let result = if on { launcher.enable() } else { launcher.disable() };
@@ -156,6 +176,7 @@ fn warm_up(app: &AppHandle) {
     tauri::async_runtime::spawn_blocking(move || local.warm_up(&model));
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 fn list_microphones() -> Vec<String> {
     audio::input_devices()
@@ -212,7 +233,7 @@ async fn download_model(app: AppHandle, name: String, text: Option<bool>) -> Cmd
         (url, settings::model_path(&dir, &name))
     };
     std::fs::create_dir_all(&dir).map_err(err)?;
-    let resp = reqwest::get(&url).await.map_err(err)?.error_for_status().map_err(err)?;
+    let resp = net::client().get(&url).send().await.map_err(err)?.error_for_status().map_err(err)?;
     let total = resp.content_length().unwrap_or(0);
     let part = final_path.with_extension("part");
     let mut file = std::fs::File::create(&part).map_err(err)?;
@@ -253,10 +274,12 @@ fn clear_history(state: State<AppState>) {
     state.history.lock().unwrap().clear();
 }
 
+#[cfg(desktop)]
 fn parse_hotkey(hotkey: &str) -> CmdResult<Shortcut> {
     hotkey.parse().map_err(|e| format!("invalid hotkey {hotkey:?}: {e}"))
 }
 
+#[cfg(desktop)]
 fn configured_hotkeys(settings: &Settings) -> [(Action, &str); 6] {
     [
         (Action::Dictate, settings.hotkey.as_str()),
@@ -268,6 +291,7 @@ fn configured_hotkeys(settings: &Settings) -> [(Action, &str); 6] {
     ]
 }
 
+#[cfg(desktop)]
 /// Registers every configured hotkey (an empty one is off) and returns the
 /// shortcut id → action map the handler looks up, plus the hotkeys another app
 /// already holds. Those stay off; they don't take the other hotkeys down.
@@ -306,12 +330,14 @@ fn register_hotkeys(app: &AppHandle, settings: &Settings) -> CmdResult<(HashMap<
     Ok((map, taken))
 }
 
+#[cfg(desktop)]
 /// Configured hotkeys that another app holds, so they're off.
 #[tauri::command]
 fn taken_hotkeys(state: State<AppState>) -> Vec<String> {
     state.taken_hotkeys.lock().unwrap().clone()
 }
 
+#[cfg(desktop)]
 fn on_shortcut(app: &AppHandle, shortcut: &Shortcut, pressed: bool) {
     let Some(state) = app.try_state::<AppState>() else { return };
     let action = state.hotkeys.lock().unwrap().get(&shortcut.id()).copied();
@@ -373,6 +399,7 @@ async fn rewrite(app: AppHandle, text: String, transform: Transform) -> CmdResul
         .map_err(|e| format!("{e:#}"))
 }
 
+#[cfg(desktop)]
 /// (whisper code, menu label) in the tray's Language submenu.
 const TRAY_LANGUAGES: &[(&str, &str)] = &[
     ("auto", "Detect automatically"),
@@ -382,8 +409,10 @@ const TRAY_LANGUAGES: &[(&str, &str)] = &[
     ("fr", "French"),
 ];
 
+#[cfg(desktop)]
 struct TrayLanguages(Mutex<Vec<CheckMenuItem<tauri::Wry>>>);
 
+#[cfg(desktop)]
 fn set_language_from_tray(app: &AppHandle, code: &str) {
     let state = app.state::<AppState>();
     let settings = {
@@ -400,6 +429,7 @@ fn set_language_from_tray(app: &AppHandle, code: &str) {
     let _ = app.emit("settings-changed", settings);
 }
 
+#[cfg(desktop)]
 fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
@@ -408,6 +438,7 @@ fn show_main(app: &AppHandle) {
     }
 }
 
+#[cfg(desktop)]
 /// Windows' folder picker; `None` when cancelled.
 #[tauri::command]
 async fn pick_folder(app: AppHandle, title: String) -> Option<String> {
@@ -426,6 +457,7 @@ async fn pick_folder(app: AppHandle, title: String) -> Option<String> {
     .map(|p| p.display().to_string())
 }
 
+#[cfg(desktop)]
 /// Starts transcribing the folders in `settings.files` (saved first by the page).
 #[tauri::command]
 fn start_files(app: AppHandle, state: State<AppState>, batch: State<Arc<files::Batch>>) -> CmdResult<()> {
@@ -433,16 +465,19 @@ fn start_files(app: AppHandle, state: State<AppState>, batch: State<Arc<files::B
     files::start(app.clone(), batch.inner().clone(), settings, state.models_dir.clone()).map_err(|e| format!("{e:#}"))
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 fn stop_files(app: AppHandle, batch: State<Arc<files::Batch>>) {
     batch.request_stop(&app);
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 fn files_status(batch: State<Arc<files::Batch>>) -> files::Status {
     batch.status()
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 fn open_folder(path: String) -> CmdResult<()> {
     let path = PathBuf::from(path);
@@ -466,21 +501,25 @@ fn app_version(app: AppHandle) -> String {
     app.package_info().version.to_string()
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 fn get_update_status(updates: State<updates::Updates>) -> updates::Status {
     updates.status()
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 async fn check_for_updates(app: AppHandle) {
     updates::check_and_download(&app).await;
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 fn install_update(app: AppHandle) -> CmdResult<()> {
     updates::install(&app)
 }
 
+#[cfg(desktop)]
 fn on_update_menu(app: &AppHandle) {
     if matches!(app.state::<updates::Updates>().status(), updates::Status::Ready { .. }) {
         if let Err(e) = updates::install(app) {
@@ -492,6 +531,7 @@ fn on_update_menu(app: &AppHandle) {
     }
 }
 
+#[cfg(desktop)]
 fn place_pill(app: &AppHandle) -> tauri::Result<()> {
     let Some(pill) = app.get_webview_window("pill") else { return Ok(()) };
     if let Ok(hwnd) = pill.hwnd() {
@@ -509,7 +549,39 @@ fn place_pill(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
+#[cfg(mobile)]
+#[tauri::mobile_entry_point]
+pub fn run() {
+    mobile::run()
+}
+
+/// The commands the Android page can call. Here rather than in mobile.rs:
+/// a command is only reachable by the path it was declared at.
+#[cfg(mobile)]
+fn mobile_commands() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
+    tauri::generate_handler![
+        mobile::save_settings,
+        mobile::transcribe,
+        get_settings,
+        list_models,
+        list_text_models,
+        download_model,
+        test_remote,
+        test_text_remote,
+        get_history,
+        clear_history,
+        list_notes,
+        save_note,
+        delete_note,
+        append_to_note,
+        set_capture,
+        get_capture,
+        rewrite,
+        app_version,
+    ]
+}
+
+#[cfg(desktop)]
 pub fn run() {
     tauri::Builder::default()
         // Stdout plus %LOCALAPPDATA%\com.talyxel.voice\logs.

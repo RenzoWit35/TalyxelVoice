@@ -27,10 +27,10 @@ export default defineConfig(() => ({
       ignored: ["**/src-tauri/**"],
     },
   },
-  // Two pages: the settings window and the dictation overlay.
+  // The settings window, the dictation overlay, and the Android app.
   build: {
     rollupOptions: {
-      input: { main: "index.html", pill: "pill.html" },
+      input: { main: "index.html", pill: "pill.html", mobile: "mobile.html" },
     },
   },
 }));

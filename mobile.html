@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <link rel="stylesheet" href="/src/mobile.css" />
+    <title>TalyxelVoice</title>
+    <script type="module" src="/src/mobile.ts" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand"><span class="brand-dot"></span>TalyxelVoice</div>
+      <nav class="tabs" role="tablist">
+        <button class="tab-btn active" data-tab="dictate" role="tab">Dictate</button>
+        <button class="tab-btn" data-tab="notes" role="tab">Notes</button>
+        <button class="tab-btn" data-tab="history" role="tab">History</button>
+        <button class="tab-btn" data-tab="settings" role="tab">Settings</button>
+      </nav>
+    </header>
+
+    <main>
+      <!-- Dictate: talk, the text lands in the draft, copy it anywhere. -->
+      <section class="tab active" id="tab-dictate">
+        <div class="recorder">
+          <button id="mic" class="mic" aria-label="Start dictating">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3.5 3.5 0 0 0 3.5-3.5v-6a3.5 3.5 0 1 0-7 0v6A3.5 3.5 0 0 0 12 15Zm6-3.5a1 1 0 1 0-2 0 4 4 0 0 1-8 0 1 1 0 1 0-2 0 6 6 0 0 0 5 5.9V20H9a1 1 0 1 0 0 2h6a1 1 0 1 0 0-2h-2v-2.6a6 6 0 0 0 5-5.9Z"/></svg>
+          </button>
+          <div class="recorder-side">
+            <p id="status" class="status-line">Tap the microphone and start talking.</p>
+            <div class="meter"><div id="meter-fill"></div></div>
+            <div class="segmented" role="radiogroup" aria-label="What the words become">
+              <label><input type="radio" name="kind" value="dictate" checked /><span>Text</span></label>
+              <label><input type="radio" name="kind" value="summary" /><span>Summary</span></label>
+            </div>
+          </div>
+        </div>
+
+        <textarea id="draft" class="draft" placeholder="What you say appears here. Edit it, then copy it into any app."></textarea>
+        <div class="toolbar">
+          <button id="draft-copy" class="btn primary">Copy</button>
+          <button id="draft-note" class="btn">Save as note</button>
+          <select id="draft-transform" aria-label="Rewrite the draft">
+            <option value="">Rewrite…</option>
+            <option value="polish">Polish</option>
+            <option value="list">Turn into a list</option>
+            <option value="shorter">Make it shorter</option>
+            <option value="friendlier">Friendlier</option>
+            <option value="formal">More formal</option>
+            <option value="translate">Translate to English</option>
+            <option value="prompt">Prompt engineer</option>
+          </select>
+          <button id="draft-undo" class="btn ghost" hidden>Undo rewrite</button>
+          <span class="spacer"></span>
+          <button id="draft-clear" class="btn ghost">Clear</button>
+        </div>
+      </section>
+
+      <!-- Notes: the same notes.json format as the desktop app. -->
+      <section class="tab" id="tab-notes">
+        <div class="notes">
+          <aside class="notes-list">
+            <div class="row">
+              <input id="notes-search" type="search" placeholder="Search notes…" />
+              <button id="note-new" class="btn primary">New</button>
+            </div>
+            <ul id="notes"></ul>
+            <p id="notes-empty" class="empty">No notes yet.</p>
+          </aside>
+          <div class="note-editor" id="note-editor" hidden>
+            <div class="row">
+              <button id="note-back" class="btn ghost back">‹ Notes</button>
+              <input id="note-title" placeholder="Title (optional)" />
+            </div>
+            <textarea id="note-body" placeholder="Type, or tap the microphone to dictate at the cursor…"></textarea>
+            <div class="toolbar">
+              <button id="note-mic" class="btn primary">Dictate</button>
+              <button id="note-copy" class="btn">Copy</button>
+              <button id="note-pin" class="btn">Pin</button>
+              <span class="spacer"></span>
+              <button id="note-delete" class="btn ghost danger">Delete</button>
+            </div>
+          </div>
+          <p id="note-none" class="empty center">Pick a note, or start a new one.</p>
+        </div>
+      </section>
+
+      <section class="tab" id="tab-history">
+        <div class="row">
+          <input id="history-search" type="search" placeholder="Search…" />
+          <button id="history-clear" class="btn ghost">Clear</button>
+        </div>
+        <ul id="history" class="history"></ul>
+        <p id="history-empty" class="empty">Nothing dictated yet.</p>
+      </section>
+
+      <section class="tab" id="tab-settings">
+        <div class="card">
+          <h2>Speech to text</h2>
+          <div class="segmented" role="radiogroup">
+            <label><input type="radio" name="engine" value="local" /><span>On this tablet</span></label>
+            <label><input type="radio" name="engine" value="remote" /><span>My server</span></label>
+          </div>
+          <div id="engine-local">
+            <p class="muted small">
+              Runs whisper on the tablet's processor; nothing leaves the device. <b>base</b> is about three times faster
+              than <b>small-q5_1</b>, which is more accurate. Downloads come from Hugging Face.
+            </p>
+            <ul id="models" class="models"></ul>
+          </div>
+          <div id="engine-remote" hidden>
+            <label class="field">Server URL<input id="remote-url" placeholder="http://192.168.1.20:8000" autocapitalize="off" /></label>
+            <label class="field">Model<input id="remote-model" autocapitalize="off" /></label>
+            <label class="field">API key <span class="muted small">optional</span><input id="remote-key" type="password" autocapitalize="off" /></label>
+            <div class="row"><button id="remote-test" class="btn">Test connection</button><span id="remote-status" class="status"></span></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Language &amp; words</h2>
+          <label class="field">Language
+            <select id="language">
+              <option value="auto">Detect automatically</option>
+              <option value="en">English</option>
+              <option value="nl">Dutch</option>
+              <option value="de">German</option>
+              <option value="fr">French</option>
+              <option value="es">Spanish</option>
+              <option value="it">Italian</option>
+              <option value="pt">Portuguese</option>
+              <option value="pl">Polish</option>
+              <option value="tr">Turkish</option>
+              <option value="uk">Ukrainian</option>
+              <option value="ja">Japanese</option>
+              <option value="zh">Chinese</option>
+            </select>
+            <span class="muted small">Picking one is about twice as fast as detecting it each time.</span>
+          </label>
+          <label class="field">Personal dictionary <span class="muted small">one per line; <code>heard =&gt; wanted</code> fixes a word</span>
+            <textarea id="dictionary" rows="5" placeholder="Talyxel&#10;share point => SharePoint"></textarea>
+          </label>
+          <label class="check"><input id="spoken-punctuation" type="checkbox" /> Spoken punctuation <span class="muted small">("comma", "new line", "vraagteken", …)</span></label>
+        </div>
+
+        <div class="card">
+          <h2>Cleanup</h2>
+          <div class="segmented wrap" role="radiogroup">
+            <label><input type="radio" name="polish" value="off" /><span>As spoken</span></label>
+            <label><input type="radio" name="polish" value="clean" /><span>Clean up</span></label>
+            <label><input type="radio" name="polish" value="medium" /><span>Medium</span></label>
+            <label><input type="radio" name="polish" value="format" /><span>Format</span></label>
+          </div>
+          <p class="muted small">
+            Clean up removes "uh", "um" and stutters, instantly. Medium, Format, summaries and rewrites need a text
+            model; on the tablet that's your own server (llama-server, Ollama, LM Studio, vLLM).
+          </p>
+          <label class="field">Text model server<input id="text-url" placeholder="http://192.168.1.20:8080" autocapitalize="off" /></label>
+          <label class="field">Model <span class="muted small">empty for the server's default</span><input id="text-model" autocapitalize="off" /></label>
+          <label class="field">API key <span class="muted small">optional</span><input id="text-key" type="password" autocapitalize="off" /></label>
+          <div class="row"><button id="text-test" class="btn">Test connection</button><span id="text-status" class="status"></span></div>
+        </div>
+
+        <div class="card">
+          <h2>History</h2>
+          <label class="check"><input id="keep-history" type="checkbox" /> Keep dictations after closing the app (text only)</label>
+          <p class="muted small" id="version"></p>
+        </div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" role="status"></div>
+  </body>
+</html>

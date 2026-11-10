@@ -1,14 +1,25 @@
+//! Microphone capture (desktop; on Android the page records), resampling to
+//! whisper's rate, and WAV encoding for the server engine.
+
+#[cfg(desktop)]
 use std::sync::atomic::{AtomicU32, Ordering};
+#[cfg(desktop)]
 use std::sync::mpsc;
+#[cfg(desktop)]
 use std::sync::{Arc, Mutex};
+#[cfg(desktop)]
 use std::thread::JoinHandle;
 
+#[cfg(desktop)]
 use anyhow::{anyhow, Context};
+#[cfg(desktop)]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+#[cfg(desktop)]
 use cpal::{FromSample, Sample, SampleFormat, SizedSample};
 
 pub const WHISPER_RATE: u32 = 16_000;
 
+#[cfg(desktop)]
 /// A recording in progress. The cpal stream lives on its own thread (it isn't
 /// `Send` on every backend); dropping the stop sender ends it.
 pub struct Recording {
@@ -20,6 +31,7 @@ pub struct Recording {
     pub level: Arc<AtomicU32>,
 }
 
+#[cfg(desktop)]
 pub fn input_devices() -> Vec<String> {
     cpal::default_host()
         .input_devices()
@@ -27,6 +39,7 @@ pub fn input_devices() -> Vec<String> {
         .unwrap_or_default()
 }
 
+#[cfg(desktop)]
 fn pick_device(name: &str) -> anyhow::Result<cpal::Device> {
     let host = cpal::default_host();
     if !name.is_empty() {
@@ -42,6 +55,7 @@ fn pick_device(name: &str) -> anyhow::Result<cpal::Device> {
         .ok_or_else(|| anyhow!("no microphone found"))
 }
 
+#[cfg(desktop)]
 impl Recording {
     pub fn start(device_name: &str) -> anyhow::Result<Self> {
         let device = pick_device(device_name)?;
@@ -105,6 +119,7 @@ impl Recording {
     }
 }
 
+#[cfg(desktop)]
 fn build<T>(
     device: &cpal::Device,
     config: cpal::StreamConfig,

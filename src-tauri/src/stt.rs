@@ -270,7 +270,7 @@ pub async fn transcribe_remote(cfg: &RemoteSettings, req: &Request) -> anyhow::R
         form = form.text("prompt", req.prompt.clone());
     }
 
-    let mut request = reqwest::Client::new()
+    let mut request = crate::net::client()
         .post(transcriptions_url(&cfg.url))
         .timeout(std::time::Duration::from_secs(60))
         .multipart(form);
